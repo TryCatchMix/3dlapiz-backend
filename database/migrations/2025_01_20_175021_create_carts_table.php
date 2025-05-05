@@ -18,12 +18,11 @@ return new class extends Migration
                 ->references('id')
                 ->on('users')
                 ->onDelete('cascade');
-            $table->string('status')->default('active'); // Opcional: para rastrear el estado del carrito
-            $table->decimal('total_amount', 10, 2)->nullable(); // Opcional: para almacenar el monto total
-            $table->timestamp('completed_at')->nullable(); // Opcional: para marcar cuándo se completó el carrito
+            $table->string('status')->default('active');
+            $table->decimal('total_amount', 10, 2)->nullable();
+            $table->timestamp('completed_at')->nullable();
             $table->timestamps();
 
-            // Índice para mejorar la búsqueda
             $table->index('status');
         });
     }

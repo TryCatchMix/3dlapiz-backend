@@ -14,14 +14,10 @@ class ProductsSeeder extends Seeder
      */
     public function run(): void
     {
-        // Eliminar todos los productos existentes
         DB::table('products')->delete();
-
-        // Obtener todas las categorías
         $categories = Category::all();
         $categoryMap = $categories->pluck('id', 'name');
 
-        // Lista de nombres de productos (sin .jpg)
         $productNames = [
             'shera',
             'Vi & Caitlyn',
@@ -37,7 +33,7 @@ class ProductsSeeder extends Seeder
             'huskangel'
         ];
 
-        $defaultCategory = $categoryMap->first(); // Usa la primera categoría como fallback
+        $defaultCategory = $categoryMap->first();
         $products = [];
 
         foreach ($productNames as $name) {
@@ -45,7 +41,7 @@ class ProductsSeeder extends Seeder
                 'id' => Str::uuid(),
                 'name' => ucfirst($name),
                 'description' => 'Producto impreso en 3D: ' . ucfirst($name),
-                'price' => rand(1500, 5000) / 100, // Precio entre 15.00 y 50.00
+                'price' => rand(1500, 5000) / 100,
                 'stock' => rand(1, 20),
                 'category_id' => $defaultCategory,
                 'created_at' => now(),

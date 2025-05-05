@@ -15,23 +15,20 @@ class ImagesSeeder extends Seeder
      */
     public function run(): void
     {
-        // Eliminar imágenes previas
         DB::table('product_images')->delete();
 
-        // Obtener productos
         $products = Product::all()->keyBy(fn ($p) => strtolower(str_replace(' ', '', $p->name)));
 
         $images = [];
         $path = public_path('images/3d_figures');
 
-        // Obtener todos los archivos de imagen
         $files = File::files($path);
 
         foreach ($files as $file) {
-            $filename = $file->getFilename(); // ejemplo: 'shera1.jpg' o 'good omens2.jpg'
-            $nameOnly = strtolower(pathinfo($filename, PATHINFO_FILENAME)); // sin extensión
-            $baseName = preg_replace('//', '', $nameOnly); // quitar números finales
-            $baseName = str_replace(' ', '', $baseName); // quitar espacios
+            $filename = $file->getFilename();
+            $nameOnly = strtolower(pathinfo($filename, PATHINFO_FILENAME));
+            $baseName = preg_replace('//', '', $nameOnly);
+            $baseName = str_replace(' ', '', $baseName);
 
             if ($products->has($baseName)) {
                 $images[] = [

@@ -24,57 +24,54 @@ Route::post('/reset-password', [AuthController::class, 'resetPassword']);
 
 
 Route::prefix('products')->group(function () {
-    Route::get('/', [ProductController::class, 'index']); // Obtener todos los productos
-    Route::get('/{id}/category', [ProductController::class, 'showWithCategory']); // Obtener producto con categoría
-    Route::get('/{id}/images', [ProductController::class, 'showWithImages']); // Obtener producto con imágenes
-    Route::get('/{id}', [ProductController::class, 'show']); // Obtener un producto específico
-    Route::post('/', [ProductController::class, 'store']); // Crear un nuevo producto
-    Route::put('/{id}', [ProductController::class, 'update']); // Actualizar un producto
-    Route::delete('/{id}', [ProductController::class, 'destroy']); // Eliminar un producto
+    Route::get('/', [ProductController::class, 'index']);
+    Route::get('/{id}/category', [ProductController::class, 'showWithCategory']);
+    Route::get('/{id}/images', [ProductController::class, 'showWithImages']);
+    Route::get('/{id}', [ProductController::class, 'show']);
+    Route::post('/', [ProductController::class, 'store']);
+    Route::put('/{id}', [ProductController::class, 'update']);
+    Route::delete('/{id}', [ProductController::class, 'destroy']);
 });
 
-// Rutas para subir imágenes de productos
-Route::post('/products/{product}/images', [ProductImageController::class, 'store']); // Subir imagen a un producto
+
+Route::post('/products/{product}/images', [ProductImageController::class, 'store']);
 
 
 Route::prefix('categories')->group(function () {
-    Route::get('/', [CategoryController::class, 'index']);           // GET /api/categories
-    Route::post('/', [CategoryController::class, 'store']);          // POST /api/categories
-    Route::get('/{id}', [CategoryController::class, 'show']);        // GET /api/categories/{id}
-    Route::put('/{id}', [CategoryController::class, 'update']);      // PUT /api/categories/{id}
-    Route::delete('/{id}', [CategoryController::class, 'destroy']);  // DELETE /api/categories/{id}
+    Route::get('/', [CategoryController::class, 'index']);
+    Route::post('/', [CategoryController::class, 'store']);
+    Route::get('/{id}', [CategoryController::class, 'show']);
+    Route::put('/{id}', [CategoryController::class, 'update']);
+    Route::delete('/{id}', [CategoryController::class, 'destroy']);
 });
 
 Route::prefix('cart')->middleware('auth:sanctum')->group(function () {
-    Route::get('/', [CartController::class, 'viewCart']); // Ver el carrito del usuario actual
-    Route::post('/add', [CartController::class, 'addToCart']); // Añadir un producto al carrito
-    Route::delete('/remove/{itemId}', [CartController::class, 'removeFromCart']); // Eliminar un producto del carrito
-    Route::put('/update/{itemId}', [CartController::class, 'updateCartItem']); // Actualizar cantidad de un producto
+    Route::get('/', [CartController::class, 'viewCart']);
+    Route::post('/add', [CartController::class, 'addToCart']);
+    Route::delete('/remove/{itemId}', [CartController::class, 'removeFromCart']);
+    Route::put('/update/{itemId}', [CartController::class, 'updateCartItem']);
 });
 
 Route::prefix('orders')->middleware('auth:sanctum')->group(function () {
-    Route::post('/checkout', [OrderController::class, 'checkout']); // Realizar una compra
-    Route::get('/', [OrderController::class, 'index']); // Ver todas las órdenes del usuario
-    Route::get('/{id}', [OrderController::class, 'show']); // Ver una orden específica
+    Route::post('/checkout', [OrderController::class, 'checkout']);
+    Route::get('/', [OrderController::class, 'index']);
+    Route::get('/{id}', [OrderController::class, 'show']);
 });
 
 Route::prefix('stripe')->group(function () {
-    Route::post('/checkout', [OrderController::class, 'checkout'])->middleware('auth:sanctum'); // Añade esta línea
+    Route::post('/checkout', [OrderController::class, 'checkout'])->middleware('auth:sanctum');
     Route::get('/success', [OrderController::class, 'stripeSuccess'])->name('stripe.success');
     Route::get('/cancel', [OrderController::class, 'stripeCancel'])->name('stripe.cancel');
     Route::post('/webhook', [OrderController::class, 'stripeWebhook'])->name('stripe.webhook');
 });
 
 Route::middleware('auth:sanctum')->group(function () {
-    // Obtener todos los pedidos del usuario autenticado
     Route::get('/orders', [OrderController::class, 'getUserOrders']);
 
-    // Obtener un pedido específico
     Route::get('/orders/{order}', [OrderController::class, 'getOrder'])->middleware('can:view,order');
 });
 
 Route::middleware('auth:sanctum')->group(function () {
-    // Rutas del carrito
     Route::get('/cart', [CartController::class, 'getCart']);
     Route::post('/cart/add', [CartController::class, 'addToCart']);
     Route::put('/cart/update', [CartController::class, 'updateCartItem']);
@@ -82,7 +79,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/cart/clear', [CartController::class, 'clearCart']);
     Route::post('/cart/sync', [CartController::class, 'syncCart']);
 
-    // Obtener detalles de productos específicos (para sincronización)
     Route::post('/products/details', [CartController::class, 'getProductsDetails']);
 });
 

@@ -14,17 +14,14 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
-        // Llamar a otros seeders
         $this->call([
             CategoriesSeeder::class,
             ProductsSeeder::class,
             ImagesSeeder::class,
         ]);
 
-        // Crear usuarios de prueba con UUID
-        User::factory(10)->create(); // Crea 10 usuarios aleatorios
+        User::factory(10)->create();
 
-        // Crear un usuario admin específico
         User::factory()->admin()->create([
             'first_name' => 'Admin',
             'last_name' => 'User',
@@ -40,7 +37,6 @@ class DatabaseSeeder extends Seeder
             'email_verified_at' => now(),
         ]);
 
-        // Crear un usuario de prueba específico
         User::factory()->create([
             'first_name' => 'John',
             'last_name' => 'Doe',

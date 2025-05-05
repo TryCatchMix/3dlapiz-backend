@@ -14,8 +14,8 @@ return new class extends Migration
         Schema::create('orders', function (Blueprint $table) {
             $table->uuid('id')->primary();
             $table->foreignUuid('user_id')->constrained()->onDelete('cascade');
-            $table->string('status')->default('pending'); // Estados: pending, paid, processing, shipped, delivered, cancelled
-            $table->string('payment_status')->default('pending'); // Estados: pending, paid, failed, cancelled
+            $table->string('status')->default('pending');
+            $table->string('payment_status')->default('pending');
             $table->string('stripe_session_id')->nullable()->unique();
             $table->string('payment_intent')->nullable();
             $table->decimal('total', 10, 2);
