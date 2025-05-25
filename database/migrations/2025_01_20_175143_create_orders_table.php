@@ -19,6 +19,8 @@ return new class extends Migration
             $table->string('stripe_session_id')->nullable()->unique();
             $table->string('payment_intent')->nullable();
             $table->decimal('total', 10, 2);
+            $table->json('shipping_info')->nullable();
+            $table->json('shipping_method')->nullable();
             $table->timestamps();
         });
     }
