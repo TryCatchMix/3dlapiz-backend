@@ -1,28 +1,82 @@
 <?php
 
+use App\Http\Controllers\Admin\AdminProductController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\CartController;
 use App\Http\Controllers\CategoryController;
+use App\Http\Controllers\OrderController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\ProductImageController;
-use App\Http\Controllers\CartController;
-use App\Http\Controllers\OrderController;
 use App\Http\Controllers\StripeController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
+
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
 
+// Auth required routes
 Route::middleware('auth:sanctum')->group(function () {
+    // Auth endpoints
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/user', [AuthController::class, 'user']);
+    Route::get('/verify-token', [AuthController::class, 'verifyToken']);
+    Route::get('/verify-role/{role}', [AuthController::class, 'verifyRole']);
+
+    // Additional auth endpoints from updated AuthController
+    Route::post('/resend-verification-email', [AuthController::class, 'resendVerificationEmail']);
+    Route::put('/profile', [AuthController::class, 'updateProfile']);
+    Route::post('/change-password', [AuthController::class, 'changePassword']);
+
+    // Cart endpoints
+    Route::prefix('cart')->group(function () {
+        Route::get('/', [CartController::class, 'getCart']);
+        Route::post('/add', [CartController::class, 'addToCart']);
+        Route::put('/update', [CartController::class, 'updateCartItem']);
+        Route::delete('/item/{productId}', [CartController::class, 'removeCartItem']);
+        Route::delete('/clear', [CartController::class, 'clearCart']);
+        Route::post('/sync', [CartController::class, 'syncCart']);
+    });
+
+    // Orders endpoints
+    Route::prefix('orders')->group(function () {
+        Route::get('/', [OrderController::class, 'getUserOrders']);
+        Route::get('/{id}', [OrderController::class, 'show']);
+        Route::get('/{order}', [OrderController::class, 'getOrder'])->middleware('can:view,order');
+        Route::post('/{order}/cancel', [OrderController::class, 'cancelOrder']);
+        Route::patch('/{order}/status', [OrderController::class, 'updateStatus']);
+    });
+
+    Route::post('/products/details', [CartController::class, 'getProductsDetails']);
+
+    // Stripe endpoints (protegidos por auth)
+    Route::prefix('stripe')->group(function () {
+        Route::post('/checkout', [StripeController::class, 'createCheckoutSession']);
+        Route::post('/confirm-payment', [StripeController::class, 'confirmPayment']);
+    });
+
+    // Admin product management
+    Route::prefix('admin/products')->group(function () {
+        Route::get('/', [AdminProductController::class, 'index']);
+        Route::post('/', [AdminProductController::class, 'store']);
+        Route::put('/{id}', [AdminProductController::class, 'update']);
+        Route::post('/{id}/images', [AdminProductController::class, 'manageImages']);
+        Route::patch('/{id}/status', [AdminProductController::class, 'updateStatus']);
+        Route::patch('/{id}/featured', [AdminProductController::class, 'updateFeatured']);
+        Route::get('/{id}/statistics', [AdminProductController::class, 'statistics']);
+        Route::post('/{id}/duplicate', [AdminProductController::class, 'duplicate']);
+        Route::get('/low-stock', [AdminProductController::class, 'lowStock']);
+        Route::post('/{id}/restore', [AdminProductController::class, 'restore']);
+        Route::get('/dashboard', [AdminProductController::class, 'dashboard']);
+    });
 });
 
-Route::middleware('auth:sanctum')->get('/verify-token', [AuthController::class, 'verifyToken']);
+// Public endpoints
 Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
 Route::post('/reset-password', [AuthController::class, 'resetPassword']);
+Route::get('/email/verify/{id}/{hash}', [AuthController::class, 'verifyEmail'])->name('verification.verify');
 
-
+// Product and category endpoints (public)
 Route::prefix('products')->group(function () {
     Route::get('/', [ProductController::class, 'index']);
     Route::get('/{id}/category', [ProductController::class, 'showWithCategory']);
@@ -33,9 +87,7 @@ Route::prefix('products')->group(function () {
     Route::delete('/{id}', [ProductController::class, 'destroy']);
 });
 
-
 Route::post('/products/{product}/images', [ProductImageController::class, 'store']);
-
 
 Route::prefix('categories')->group(function () {
     Route::get('/', [CategoryController::class, 'index']);
@@ -45,41 +97,9 @@ Route::prefix('categories')->group(function () {
     Route::delete('/{id}', [CategoryController::class, 'destroy']);
 });
 
-Route::prefix('cart')->middleware('auth:sanctum')->group(function () {
-    Route::get('/', [CartController::class, 'viewCart']);
-    Route::post('/add', [CartController::class, 'addToCart']);
-    Route::delete('/remove/{itemId}', [CartController::class, 'removeFromCart']);
-    Route::put('/update/{itemId}', [CartController::class, 'updateCartItem']);
-});
-
-Route::prefix('orders')->middleware('auth:sanctum')->group(function () {
-    Route::post('/checkout', [OrderController::class, 'checkout']);
-    Route::get('/', [OrderController::class, 'index']);
-    Route::get('/{id}', [OrderController::class, 'show']);
-});
-
+// Stripe endpoints públicos (webhooks y redirecciones)
 Route::prefix('stripe')->group(function () {
-    Route::post('/checkout', [OrderController::class, 'checkout'])->middleware('auth:sanctum');
-    Route::get('/success', [OrderController::class, 'stripeSuccess'])->name('stripe.success');
-    Route::get('/cancel', [OrderController::class, 'stripeCancel'])->name('stripe.cancel');
-    Route::post('/webhook', [OrderController::class, 'stripeWebhook'])->name('stripe.webhook');
+    Route::post('/webhook', [StripeController::class, 'handleWebhook'])->name('stripe.webhook');
+    Route::get('/success', [StripeController::class, 'success'])->name('stripe.success');
+    Route::get('/cancel', [StripeController::class, 'cancel'])->name('stripe.cancel');
 });
-
-Route::middleware('auth:sanctum')->group(function () {
-    Route::get('/orders', [OrderController::class, 'getUserOrders']);
-
-    Route::get('/orders/{order}', [OrderController::class, 'getOrder'])->middleware('can:view,order');
-});
-
-Route::middleware('auth:sanctum')->group(function () {
-    Route::get('/cart', [CartController::class, 'getCart']);
-    Route::post('/cart/add', [CartController::class, 'addToCart']);
-    Route::put('/cart/update', [CartController::class, 'updateCartItem']);
-    Route::delete('/cart/item/{productId}', [CartController::class, 'removeCartItem']);
-    Route::delete('/cart/clear', [CartController::class, 'clearCart']);
-    Route::post('/cart/sync', [CartController::class, 'syncCart']);
-
-    Route::post('/products/details', [CartController::class, 'getProductsDetails']);
-});
-
-
