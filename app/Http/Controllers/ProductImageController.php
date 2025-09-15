@@ -17,7 +17,7 @@ class ProductImageController extends Controller
     public function store(Request $request, Product $product)
     {
         $request->validate([
-            'image' => 'required|image|mimes:jpeg,png,jpg,gif|max:2048',
+            'image' => 'required|image|mimes:jpeg,png,jpg,gif|max:4096',
         ]);
 
         $path = $request->file('image')->store('products', 'public');
