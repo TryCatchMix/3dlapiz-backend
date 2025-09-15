@@ -1,15 +1,18 @@
 <?php
 
 use App\Http\Controllers\Admin\AdminProductController;
+use App\Http\Controllers\Api\CountriesController;
+use App\Http\Controllers\Api\ProfileController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\CartController;
-use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\ProductImageController;
 use App\Http\Controllers\StripeController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+
+
 
 
 Route::post('/register', [AuthController::class, 'register']);
@@ -76,10 +79,8 @@ Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
 Route::post('/reset-password', [AuthController::class, 'resetPassword']);
 Route::get('/email/verify/{id}/{hash}', [AuthController::class, 'verifyEmail'])->name('verification.verify');
 
-// Product and category endpoints (public)
 Route::prefix('products')->group(function () {
     Route::get('/', [ProductController::class, 'index']);
-    Route::get('/{id}/category', [ProductController::class, 'showWithCategory']);
     Route::get('/{id}/images', [ProductController::class, 'showWithImages']);
     Route::get('/{id}', [ProductController::class, 'show']);
     Route::post('/', [ProductController::class, 'store']);
@@ -89,17 +90,37 @@ Route::prefix('products')->group(function () {
 
 Route::post('/products/{product}/images', [ProductImageController::class, 'store']);
 
-Route::prefix('categories')->group(function () {
-    Route::get('/', [CategoryController::class, 'index']);
-    Route::post('/', [CategoryController::class, 'store']);
-    Route::get('/{id}', [CategoryController::class, 'show']);
-    Route::put('/{id}', [CategoryController::class, 'update']);
-    Route::delete('/{id}', [CategoryController::class, 'destroy']);
-});
-
 // Stripe endpoints públicos (webhooks y redirecciones)
 Route::prefix('stripe')->group(function () {
     Route::post('/webhook', [StripeController::class, 'handleWebhook'])->name('stripe.webhook');
     Route::get('/success', [StripeController::class, 'success'])->name('stripe.success');
     Route::get('/cancel', [StripeController::class, 'cancel'])->name('stripe.cancel');
+});
+
+
+Route::prefix('countries')->group(function () {
+    Route::get('/', [CountriesController::class, 'index']);
+    Route::get('/search', [CountriesController::class, 'search']);
+});
+
+// Rutas públicas
+Route::prefix('countries')->group(function () {
+    Route::get('/', [CountriesController::class, 'index']);
+    Route::get('/search', [CountriesController::class, 'search']);
+});
+
+// Rutas protegidas por autenticación
+Route::middleware(['auth:sanctum'])->prefix('profile')->group(function () {
+    // Obtener perfil del usuario
+    Route::get('/', [ProfileController::class, 'show']);
+
+    // Actualizar perfil del usuario
+    Route::put('/', [ProfileController::class, 'update']);
+    Route::patch('/', [ProfileController::class, 'update']);
+
+    // Obtener límites de cambios
+    Route::get('/limits', [ProfileController::class, 'limits']);
+
+    // Cambiar contraseña
+    Route::post('/change-password', [ProfileController::class, 'changePassword']);
 });
