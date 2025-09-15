@@ -11,10 +11,12 @@ use Illuminate\Notifications\Notifiable;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\HasApiTokens;
+use Carbon\Carbon;
 
 class User extends Authenticatable implements MustVerifyEmail
 {
     use HasApiTokens, HasUuids, HasFactory, Notifiable, SoftDeletes;
+
     public $incrementing = false;
     protected $keyType = 'string';
 
@@ -24,11 +26,6 @@ class User extends Authenticatable implements MustVerifyEmail
 
     public const ROLE_ENUM = [self::ROLE_ADMIN, self::ROLE_STAFF, self::ROLE_USER];
 
-    /**
-     * The attributes that are mass assignable.
-     *
-     * @var list<string>
-     */
     protected $fillable = [
         'id',
         'first_name',
@@ -47,11 +44,6 @@ class User extends Authenticatable implements MustVerifyEmail
         'last_login_at'
     ];
 
-    /**
-     * The attributes that should be hidden for serialization.
-     *
-     * @var list<string>
-     */
     protected $hidden = [
         'password',
         'remember_token',
@@ -59,11 +51,6 @@ class User extends Authenticatable implements MustVerifyEmail
         'deleted_at'
     ];
 
-    /**
-     * Get the attributes that should be cast.
-     *
-     * @return array<string, string>
-     */
     protected function casts(): array
     {
         return [
@@ -72,9 +59,16 @@ class User extends Authenticatable implements MustVerifyEmail
             'is_active' => 'boolean',
             'last_login_at' => 'datetime',
             'deleted_at' => 'datetime',
-            'role' => 'string'
+            'role' => 'string',
+            'phone_verified_at' => 'datetime',
+            'last_profile_change' => 'datetime',
+            'profile_change_reset_date' => 'datetime',
+            'phone_verified' => 'boolean',
         ];
     }
+
+    const MAX_PROFILE_CHANGES_PER_MONTH = 5;
+    const PROFILE_CHANGE_RESET_DAYS = 30;
 
     /**
      * Relationships
@@ -92,27 +86,12 @@ class User extends Authenticatable implements MustVerifyEmail
         return "{$this->first_name} {$this->last_name}";
     }
 
-    /*
-    protected static function boot()
-    {
-        parent::boot();
-
-        static::creating(function ($model) {
-            if (empty($model->{$model->getKeyName()})) {
-                $model->{$model->getKeyName()} = Str::uuid()->toString();
-            }
-        });
-    }*/
-
     public function getFormattedPhoneAttribute(): ?string
     {
         if (!$this->phone_number) return null;
-        return "+{$this->phone_country_code} {$this->phone_number}";
+        return "{$this->phone_country_code} {$this->phone_number}";
     }
 
-    /**
-     * Security methods
-     */
     public function isAdmin(): bool
     {
         return $this->role === self::ROLE_ADMIN;
@@ -121,6 +100,55 @@ class User extends Authenticatable implements MustVerifyEmail
     public function hasVerifiedPhone(): bool
     {
         return $this->phone_verified_at !== null;
+    }
+
+    public function canChangeProfile(): bool
+    {
+        if ($this->isAdmin()) {
+            return true;
+        }
+
+        if (!$this->profile_change_reset_date) {
+            return true;
+        }
+
+        if (now()->gt($this->profile_change_reset_date)) {
+            $this->update([
+                'profile_changes_count' => 0,
+                'profile_change_reset_date' => now()->addDays(self::PROFILE_CHANGE_RESET_DAYS),
+            ]);
+            return true;
+        }
+
+        return $this->profile_changes_count < self::MAX_PROFILE_CHANGES_PER_MONTH;
+    }
+
+    public function incrementProfileChanges(): void
+    {
+        if ($this->isAdmin()) {
+            return;
+        }
+
+        $resetDate = $this->profile_change_reset_date ?: now()->addDays(self::PROFILE_CHANGE_RESET_DAYS);
+
+        $this->update([
+            'profile_changes_count' => $this->profile_changes_count + 1,
+            'last_profile_change' => now(),
+            'profile_change_reset_date' => $resetDate,
+        ]);
+    }
+
+    public function getRemainingProfileChanges(): int
+    {
+        if ($this->isAdmin()) {
+            return 999;
+        }
+
+        if (!$this->canChangeProfile()) {
+            return 0;
+        }
+
+        return self::MAX_PROFILE_CHANGES_PER_MONTH - $this->profile_changes_count;
     }
 
     /**
@@ -134,13 +162,32 @@ class User extends Authenticatable implements MustVerifyEmail
             'email' => 'required|email|unique:users',
             'password' => 'required|string|min:12|confirmed',
             'phone_country_code' => 'required_with:phone_number|string|max:5',
-            'phone_number' => 'nullable|string|max:20|phone:INTERNATIONAL',
-            'street' => 'required|string|max:255',
-            'city' => 'required|string|max:100',
-            'state' => 'required|string|max:100',
-            'postal_code' => 'required|string|max:20',
-            'country_code' => 'required|string|size:2',
+            'phone_number' => 'nullable|string|max:20',
+            'street' => 'nullable|string|max:255',
+            'city' => 'nullable|string|max:100',
+            'state' => 'nullable|string|max:100',
+            'postal_code' => 'nullable|string|max:20',
+            'country_code' => 'nullable|string|size:2',
             'role' => 'sometimes|in:' . implode(',', self::ROLE_ENUM)
+        ];
+    }
+
+    /**
+     * Validation rules para actualización de perfil
+     */
+    public static function profileUpdateRules($userId = null): array
+    {
+        return [
+            'first_name' => 'sometimes|string|max:50|min:2',
+            'last_name' => 'sometimes|string|max:50|min:2',
+            'email' => 'sometimes|email|unique:users,email,' . $userId,
+            'phone_country_code' => 'required_with:phone_number|string|max:5',
+            'phone_number' => 'nullable|string|max:20|regex:/^[0-9\s\-\+\(\)]+$/',
+            'street' => 'nullable|string|max:255|min:5',
+            'city' => 'nullable|string|max:100|min:2',
+            'state' => 'nullable|string|max:100|min:2',
+            'postal_code' => 'nullable|string|max:20|min:3',
+            'country_code' => 'nullable|string|size:2|uppercase',
         ];
     }
 
@@ -150,6 +197,16 @@ class User extends Authenticatable implements MustVerifyEmail
     public function setPhoneNumberAttribute($value): void
     {
         $this->attributes['phone_number'] = preg_replace('/[^0-9]/', '', $value);
+    }
+
+    public function setCountryCodeAttribute($value): void
+    {
+        $this->attributes['country_code'] = strtoupper($value);
+    }
+
+    public function setPostalCodeAttribute($value): void
+    {
+        $this->attributes['postal_code'] = strtoupper(trim($value));
     }
 
     public function sendEmailVerificationNotification()
