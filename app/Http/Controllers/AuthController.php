@@ -98,7 +98,8 @@ class AuthController extends Controller
 {
     return response()->json([
         'user' => $request->user()->only([
-            'id', 'first_name', 'last_name', 'email', 'role'
+            'id', 'first_name', 'last_name', 'email', 'role', 'city', 'state', 'postal_code', 'country_code',
+            'phone_country_code', 'phone_number', 'street'
         ])
     ]);
 }
