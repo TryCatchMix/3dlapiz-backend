@@ -5,7 +5,6 @@ namespace Database\Seeders;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
-use App\Models\Category;
 
 class ProductsSeeder extends Seeder
 {
@@ -15,25 +14,22 @@ class ProductsSeeder extends Seeder
     public function run(): void
     {
         DB::table('products')->delete();
-        $categories = Category::all();
-        $categoryMap = $categories->pluck('id', 'name');
 
         $productNames = [
             'shera',
-            'Vi & Caitlyn',
-            'Caitlyn & Vi',
-            'rubi zafiro',
-            'good omens',
-            'Alastor Vox',
+            'Vi_y_Caitlyn',
+            'Caitlyn_y_Vi',
+            'rubi_zafiro',
+            'good_omens',
+            'Alastor_Vox',
             'hearthstopper',
-            'Warwick & Vi',
+            'Warwick_y_Vi',
             'luzamity',
-            'Viktor & Jayce',
+            'Viktor_y_Jayce',
             'chicle',
             'huskangel'
         ];
 
-        $defaultCategory = $categoryMap->first();
         $products = [];
 
         foreach ($productNames as $name) {
@@ -43,7 +39,6 @@ class ProductsSeeder extends Seeder
                 'description' => 'Producto impreso en 3D: ' . ucfirst($name),
                 'price' => rand(1500, 5000) / 100,
                 'stock' => rand(1, 20),
-                'category_id' => $defaultCategory,
                 'created_at' => now(),
                 'updated_at' => now()
             ];

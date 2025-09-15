@@ -26,20 +26,13 @@ class ProductController extends Controller
 
     public function index(Request $request = null)
     {
-        return Product::with(['category', 'images'])->get();
+        return Product::with(['images'])->get();
     }
 
     public function show($id)
     {
         $this->validateUuid($id);
-        $product = Product::with(['category', 'images'])->findOrFail($id);
-        return response()->json($product);
-    }
-
-    public function showWithCategory($id)
-    {
-        $this->validateUuid($id);
-        $product = Product::with('category')->findOrFail($id);
+        $product = Product::with(['images'])->findOrFail($id);
         return response()->json($product);
     }
 
@@ -60,7 +53,6 @@ class ProductController extends Controller
             'description' => 'nullable|string',
             'price' => 'sometimes|numeric',
             'stock' => 'sometimes|integer',
-            'category_id' => 'sometimes|exists:categories,id',
         ]);
 
         $product->update($validated);
