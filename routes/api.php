@@ -124,3 +124,21 @@ Route::middleware(['auth:sanctum'])->prefix('profile')->group(function () {
     // Cambiar contraseña
     Route::post('/change-password', [ProfileController::class, 'changePassword']);
 });
+
+Route::middleware('auth:sanctum')->group(function () {
+    // Obtener todos los pedidos del usuario
+    Route::get('/orders/my-orders', [OrderController::class, 'getUserOrders']);
+
+    // Obtener un pedido específico
+    Route::get('/orders/{order}', [OrderController::class, 'getOrder']);
+
+    // Cancelar un pedido
+    Route::post('/orders/{order}/cancel', [OrderController::class, 'cancelOrder']);
+
+    // Crear pedido y checkout
+    Route::post('/orders/checkout', [OrderController::class, 'checkout']);
+});
+
+Route::get('/stripe/success', [OrderController::class, 'stripeSuccess'])->name('stripe.success');
+Route::get('/stripe/cancel', [OrderController::class, 'stripeCancel'])->name('stripe.cancel');
+Route::post('/stripe/webhook', [OrderController::class, 'stripeWebhook'])->name('stripe.webhook');
