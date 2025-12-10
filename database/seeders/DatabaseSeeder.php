@@ -6,6 +6,7 @@ use App\Models\User;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\DB;
 
 class DatabaseSeeder extends Seeder
 {
@@ -19,6 +20,7 @@ class DatabaseSeeder extends Seeder
             ImagesSeeder::class,
         ]);
 
+        DB::table('users')->delete();
         User::factory(10)->create();
 
         User::factory()->admin()->create([
@@ -27,7 +29,7 @@ class DatabaseSeeder extends Seeder
             'email' => 'admin@example.com',
             'password' => Hash::make('AdminSecurePassword123!'),
             'phone_country_code' => '+1',
-            'phone_number' => '5559876543',
+            'phone_number' => '555987654',
             'street' => '456 Admin St',
             'city' => 'Admin City',
             'state' => 'AD',
@@ -42,7 +44,7 @@ class DatabaseSeeder extends Seeder
             'email' => 'john.doe@example.com',
             'password' => Hash::make('SecurePassword123!'),
             'phone_country_code' => '+1',
-            'phone_number' => '5551234567',
+            'phone_number' => '555123456',
             'street' => '123 Main St',
             'city' => 'New York',
             'state' => 'NY',
