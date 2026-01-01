@@ -50,15 +50,28 @@ class AdminProductController extends ProductController
         $product = Product::create($validated);
 
         if ($request->hasFile('images')) {
-            foreach ($request->file('images') as $image) {
-                $path = $image->store('products', 'public');
+    foreach ($request->file('images') as $image) {
 
-                ProductImage::create([
-                    'product_id' => $product->id,
-                    'image_url' => $path,
-                ]);
-            }
+        $filename = time() . '_' . $image->getClientOriginalName();
+
+        // Ruta física: public/images/3d_figures
+        $destination = public_path('images/3d_figures');
+
+        // Crear dir si no existe
+        if (!file_exists($destination)) {
+            mkdir($destination, 0777, true);
         }
+
+        // Mover archivo
+        $image->move($destination, $filename);
+
+        // Guardar URL relativa (public/)
+        ProductImage::create([
+            'product_id' => $product->id,
+            'image_url' => 'images/3d_figures/' . $filename,
+        ]);
+    }
+}
 
         return response()->json($product->load(['images']), 201);
     }
