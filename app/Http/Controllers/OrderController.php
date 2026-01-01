@@ -35,7 +35,7 @@ class OrderController extends Controller
                         'currency' => 'usd',
                         'product_data' => [
                             'name' => $item->product->name,
-                            // 'images' => [$item->product->image_url],
+                            'images' => [$item->product->image_url],
                         ],
                         'unit_amount' => (int)($item->price * 100),
                     ],
@@ -54,7 +54,9 @@ class OrderController extends Controller
                     $order->items()->create([
                         'product_id' => $item->product_id,
                         'quantity' => $item->quantity,
-                        'price' => $item->price
+                        'price' => $item->price,
+                        'product_name' => $item->product->name,
+                        'product_image' => $item->product->image_url,
                     ]);
                 }
 
@@ -84,7 +86,7 @@ class OrderController extends Controller
             });
 
             return response()->json([
-                'order' => $order,
+                'order' => $order->load('items.product'),
                 'checkout_url' => $checkout_session->url
             ], 201);
 
@@ -107,7 +109,7 @@ class OrderController extends Controller
 
         $order->user->notify(new OrderStatusNotification($order));
 
-        return response()->json(['message' => 'Order status updated']);
+        return response()->json(['message' => 'Order status updated', 'order' => $order->load('items.product')]);
     }
 
     public function stripeWebhook(Request $request)
@@ -180,7 +182,7 @@ class OrderController extends Controller
 
             return response()->json([
                 'success' => true,
-                'order' => $order
+                'order' => $order->load('items.product')
             ]);
 
         } catch (ApiErrorException $e) {
@@ -211,39 +213,55 @@ class OrderController extends Controller
     public function getUserOrders()
     {
         $orders = Order::where('user_id', auth()->id())
-            ->with('items.product')
+            ->with(['items.product'])
             ->orderBy('created_at', 'desc')
             ->get();
 
-        return response()->json($orders);
+        return response()->json([
+            'success' => true,
+            'orders' => $orders
+        ]);
     }
 
     public function getOrder(Order $order)
     {
+        // Verificar que el pedido pertenece al usuario autenticado
+        if ($order->user_id !== auth()->id()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No autorizado'
+            ], 403);
+        }
+
         $order->load('items.product');
 
-        return response()->json($order);
+        return response()->json([
+            'success' => true,
+            'order' => $order
+        ]);
     }
 
     public function cancelOrder(Order $order, Request $request)
     {
-        if (!in_array($order->status, ['pending', 'processing'])) {
-            return response()->json(['message' => 'Este pedido no puede ser cancelado'], 400);
-        }
-
+        // Verificar que el pedido pertenece al usuario autenticado
         if ($order->user_id !== auth()->id()) {
             return response()->json(['message' => 'No autorizado'], 403);
         }
 
+        if (!in_array($order->status, ['pending', 'processing'])) {
+            return response()->json(['message' => 'Este pedido no puede ser cancelado'], 400);
+        }
+
         $order->update([
             'status' => 'cancelled',
-            'cancelled_at' => now(),
-            'cancellation_reason' => $request->input('reason')
+            'payment_status' => 'cancelled'
         ]);
 
         $order->user->notify(new OrderStatusNotification($order));
 
-        return response()->json(['message' => 'Pedido cancelado correctamente']);
+        return response()->json([
+            'message' => 'Pedido cancelado correctamente',
+            'order' => $order->load('items.product')
+        ]);
     }
-
 }

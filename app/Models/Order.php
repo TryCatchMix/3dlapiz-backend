@@ -2,40 +2,62 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Str;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Order extends Model
 {
+    use HasFactory, HasUuids;
+
     protected $fillable = [
         'user_id',
         'status',
-        'total',
+        'payment_status',
         'stripe_session_id',
         'payment_intent',
-        'payment_status'
+        'total',
+        'shipping_info',
+        'shipping_method',
     ];
 
-    public $incrementing = false;
-    protected $keyType = 'string';
+    protected $casts = [
+        'shipping_info' => 'array',
+        'shipping_method' => 'array',
+        'total' => 'decimal:2',
+    ];
 
-    public function items()
-    {
-        return $this->hasMany(OrderItem::class);
-    }
-
-    public function user()
+    /**
+     * Relación con el usuario
+     */
+    public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
     }
 
-    protected static function boot()
+    /**
+     * Relación con los items del pedido
+     */
+    public function items(): HasMany
     {
-        parent::boot();
-        static::creating(function ($model) {
-            if (empty($model->{$model->getKeyName()})) {
-                $model->{$model->getKeyName()} = Str::uuid()->toString();
-            }
-        });
+        return $this->hasMany(OrderItem::class);
+    }
+
+    /**
+     * Scope para filtrar por usuario
+     */
+    public function scopeForUser($query, $userId)
+    {
+        return $query->where('user_id', $userId);
+    }
+
+    /**
+     * Scope para filtrar por estado
+     */
+    public function scopeByStatus($query, $status)
+    {
+        return $query->where('status', $status);
     }
 }
