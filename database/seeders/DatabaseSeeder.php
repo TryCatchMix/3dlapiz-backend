@@ -5,24 +5,28 @@ namespace Database\Seeders;
 use App\Models\User;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
 
 class DatabaseSeeder extends Seeder
 {
-    /**
-     * Seed the application's database.
-     */
     public function run(): void
     {
+        // Limpiar tablas en orden correcto
+        DB::table('order_items')->delete();
+        DB::table('orders')->delete();
+        DB::table('products')->delete();
+        DB::table('users')->delete();
+
+        // 1️⃣ Productos e imágenes
         $this->call([
             ProductsSeeder::class,
             ImagesSeeder::class,
         ]);
 
-        DB::table('users')->delete();
+        // 2️⃣ Usuarios normales
         User::factory(10)->create();
 
+        // 3️⃣ Admin
         User::factory()->admin()->create([
             'first_name' => 'Admin',
             'last_name' => 'User',
@@ -38,6 +42,7 @@ class DatabaseSeeder extends Seeder
             'email_verified_at' => now(),
         ]);
 
+        // 4️⃣ Usuario fijo para testing frontend
         User::factory()->create([
             'first_name' => 'John',
             'last_name' => 'Doe',
@@ -52,6 +57,11 @@ class DatabaseSeeder extends Seeder
             'country_code' => 'US',
             'role' => User::ROLE_USER,
             'email_verified_at' => now(),
+        ]);
+
+        // 5️⃣ Pedidos (DESPUÉS de users y products)
+        $this->call([
+            OrdersSeeder::class,
         ]);
     }
 }
