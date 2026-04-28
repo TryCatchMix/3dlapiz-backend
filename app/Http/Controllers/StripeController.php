@@ -19,115 +19,141 @@ class StripeController extends Controller
         Stripe::setApiKey(config('services.stripe.secret'));
     }
 
-    public function createCheckoutSession(Request $request, User $user)
-    {
-        $request->validate([
-            'shipping_info' => 'required|array',
-            'shipping_info.fullName' => 'required|string',
-            'shipping_info.email' => 'required|email',
-            'shipping_info.address' => 'required|string',
-            'shipping_info.city' => 'required|string',
-            'shipping_info.postalCode' => 'required|string',
-            'shipping_info.country' => 'required|string',
-            'shipping_info.phone' => 'required|string',
-            'shipping_method' => 'required|array',
-            'shipping_method.id' => 'required',
-            'shipping_method.name' => 'required|string',
-            'shipping_method.price' => 'required|numeric|min:0',
-            'items' => 'required|array|min:1',
-            'items.*.product_id' => 'required',
-            'items.*.quantity' => 'required|integer|min:1',
-            'items.*.price' => 'required|numeric|min:0.50',
-            'items.*.name' => 'required|string',
-            'total' => 'required|numeric|min:0.50',
-            'success_url' => 'required|string',
-            'cancel_url' => 'required|string'
-        ]);
+    public function createCheckoutSession(Request $request, \App\Services\ShippingService $shipping)
+{
+    $validated = $request->validate([
+        'shipping_info' => 'required|array',
+        'shipping_info.fullName' => 'required|string|max:120',
+        'shipping_info.email' => 'required|email',
+        'shipping_info.address' => 'required|string|max:255',
+        'shipping_info.city' => 'required|string|max:100',
+        'shipping_info.postalCode' => 'required|string|max:20',
+        'shipping_info.country_code' => ['required', 'string', 'size:2', 'regex:/^[A-Za-z]{2}$/'],
+        'shipping_info.phone' => 'required|string|max:30',
 
-        // Obtener el usuario autenticado
-        $authenticatedUser = $request->user();
+        'items' => 'required|array|min:1',
+        'items.*.product_id' => 'required|exists:products,id',
+        'items.*.quantity' => 'required|integer|min:1',
+        'items.*.variant' => 'nullable|in:painted,unpainted',
+    ]);
 
-        try {
-            return DB::transaction(function () use ($request, $authenticatedUser) {
-                // Crear la orden primero
-                $order = Order::create([
-                    'user_id' => $authenticatedUser->id,
-                    'status' => 'pending',
-                    'payment_status' => 'pending',
-                    'total' => $request->total,
-                    'shipping_info' => json_encode($request->shipping_info),
-                    'shipping_method' => json_encode($request->shipping_method)
-                ]);
+    $user = $request->user();
 
-                // Crear los items de la orden
-                foreach ($request->items as $item) {
-                    OrderItem::create([
-                        'order_id' => $order->id,
-                        'product_id' => $item['product_id'],
-                        'quantity' => $item['quantity'],
-                        'price' => $item['price'],
-                        'product_name' => $item['name'],
-                        'product_image' => $item['image_url'] ?? null
-                    ]);
-                }
-
-                // Preparar line items para Stripe
-                $lineItems = $this->buildLineItems($request);
-
-                // Crear sesión de Stripe
-                $checkout_session = Session::create([
-                    'payment_method_types' => ['card'],
-                    'line_items' => $lineItems,
-                    'mode' => 'payment',
-                    'success_url' => $request->success_url,
-                    'cancel_url' => $request->cancel_url,
-                    'customer_email' => $request->shipping_info['email'],
-                    'shipping_address_collection' => [
-                        'allowed_countries' => ['ES', 'FR', 'DE', 'IT', 'PT'], // Países europeos
-                    ],
-                    'metadata' => [
-                        'order_id' => $order->id,
-                        'user_id' => $authenticatedUser->id
-                    ],
-                ]);
-
-                // Actualizar orden con session_id
-                $order->update([
-                    'stripe_session_id' => $checkout_session->id
-                ]);
-
-                return response()->json([
-                    'success' => true,
-                    'session_id' => $checkout_session->id,
-                    'order_id' => $order->id
-                ]);
-            });
-
-        } catch (ApiErrorException $e) {
-            Log::error('Stripe API Error: ' . $e->getMessage(), [
-                'user_id' => $authenticatedUser->id,
-                'request_data' => $request->all()
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Error al procesar el pago',
-                'error' => $e->getMessage()
-            ], 500);
-
-        } catch (\Exception $e) {
-            Log::error('Order creation error: ' . $e->getMessage(), [
-                'user_id' => $authenticatedUser->id,
-                'request_data' => $request->all()
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Error al crear la orden',
-                'error' => $e->getMessage()
-            ], 500);
-        }
+    // 1) Precio de envío recalculado en backend
+    try {
+        $shippingPrice = $shipping->priceFor($validated['shipping_info']['country_code']);
+    } catch (\InvalidArgumentException $e) {
+        return response()->json(['error' => $e->getMessage()], 422);
     }
+
+    // 2) Resolver productos y calcular precios reales (nunca confiar en el frontend)
+    $productIds = collect($validated['items'])->pluck('product_id')->unique()->values();
+    $products = \App\Models\Product::with('images')->whereIn('id', $productIds)->get()->keyBy('id');
+
+    $resolvedItems = [];
+    $subtotal = 0;
+
+    foreach ($validated['items'] as $item) {
+        $product = $products->get($item['product_id']);
+        if (!$product) {
+            return response()->json(['error' => "Producto no encontrado: {$item['product_id']}"], 422);
+        }
+        if ($product->stock < $item['quantity']) {
+            return response()->json(['error' => "Stock insuficiente para {$product->name}"], 422);
+        }
+
+        $variant = $item['variant'] ?? 'painted';
+        try {
+            $price = $product->priceForVariant($variant);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => $e->getMessage()], 422);
+        }
+
+        $resolvedItems[] = compact('product', 'variant', 'price') + ['quantity' => $item['quantity']];
+        $subtotal += $price * $item['quantity'];
+    }
+
+    $total = $subtotal + $shippingPrice;
+
+    if ($total < 0.5) {
+        return response()->json(['error' => 'El total debe ser al menos 0,50€.'], 422);
+    }
+
+    // 3) Crear orden + sesión Stripe en transacción
+    try {
+        return DB::transaction(function () use ($user, $validated, $resolvedItems, $shippingPrice, $total) {
+            $order = Order::create([
+                'user_id'        => $user->id,
+                'status'         => 'pending',
+                'payment_status' => 'pending',
+                'total'          => $total,
+                'shipping_info'  => $validated['shipping_info'],
+                'shipping_method' => [
+                    'country_code' => strtoupper($validated['shipping_info']['country_code']),
+                    'price'        => $shippingPrice,
+                ],
+            ]);
+
+            $lineItems = [];
+
+            foreach ($resolvedItems as $r) {
+                /** @var \App\Models\Product $product */
+                $product = $r['product'];
+
+                OrderItem::create([
+                    'order_id'      => $order->id,
+                    'product_id'    => $product->id,
+                    'quantity'      => $r['quantity'],
+                    'variant'       => $r['variant'],
+                    'price'         => $r['price'],
+                    'product_name'  => $product->name,
+                    'product_image' => optional($product->images->first())->image_url,
+                ]);
+
+                $lineItems[] = [
+                    'price_data' => [
+                        'currency' => 'eur',
+                        'product_data' => [
+                            'name' => $product->name . ($r['variant'] === 'unpainted' ? ' (sin pintar)' : ''),
+                        ],
+                        'unit_amount' => (int) round($r['price'] * 100),
+                    ],
+                    'quantity' => $r['quantity'],
+                ];
+            }
+
+            if ($shippingPrice > 0) {
+                $lineItems[] = [
+                    'price_data' => [
+                        'currency' => 'eur',
+                        'product_data' => ['name' => 'Envío'],
+                        'unit_amount' => (int) round($shippingPrice * 100),
+                    ],
+                    'quantity' => 1,
+                ];
+            }
+
+            $session = Session::create([
+    'payment_method_types' => ['card'],
+    'line_items'           => $lineItems,
+    'mode'                 => 'payment',
+    'success_url'          => rtrim(config('app.frontend_url'), '/') . '/checkout?session_id={CHECKOUT_SESSION_ID}',
+    'cancel_url'           => rtrim(config('app.frontend_url'), '/') . '/cart',
+    'customer_email'       => $user->email,
+]);
+
+            $order->update(['stripe_session_id' => $session->id]);
+
+            return response()->json(['session_id' => $session->id]);
+        });
+    } catch (ApiErrorException $e) {
+        Log::error('Stripe error: ' . $e->getMessage());
+        return response()->json(['error' => 'Error procesando el pago.'], 500);
+    } catch (\Exception $e) {
+        Log::error('Checkout error: ' . $e->getMessage());
+        return response()->json(['error' => 'Error creando el pedido.'], 500);
+    }
+}
 
     public function confirmPayment(Request $request)
     {
