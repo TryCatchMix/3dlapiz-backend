@@ -18,8 +18,30 @@ class Product extends Model
         'name',
         'description',
         'price',
+        'youtube_url',
+        'unpainted_price',
         'stock',
+
     ];
+
+    protected $casts = [
+    'price' => 'decimal:2',
+    'unpainted_price' => 'decimal:2',
+];
+
+public function priceForVariant(string $variant): float
+{
+    if ($variant === 'painted') {
+        return (float) $this->price;
+    }
+    if ($variant === 'unpainted') {
+        if ($this->unpainted_price === null) {
+            throw new \InvalidArgumentException('Este producto no tiene variante sin pintar.');
+        }
+        return (float) $this->unpainted_price;
+    }
+    throw new \InvalidArgumentException('Variante no válida.');
+}
 
     public function images()
     {
