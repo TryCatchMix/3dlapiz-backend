@@ -11,6 +11,9 @@ use Illuminate\Support\Str;
 
 class AdminProductController extends ProductController
 {
+
+private const YOUTUBE_URL_REGEX =
+    '/^https:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/)|youtu\.be\/)[A-Za-z0-9_-]{11}(?:[?&][\w=\-&%.]*)?$/';
     public function index(Request $request = null)
     {
         $perPage = $request->input('per_page', 15);
@@ -39,6 +42,8 @@ class AdminProductController extends ProductController
             'stock' => 'required|integer|min:0',
             'images' => 'nullable|array',
             'images.*' => 'image|mimes:jpeg,png,jpg,gif|max:2048',
+            'youtube_url' => ['nullable', 'string', 'max:255', 'regex:' . self::YOUTUBE_URL_REGEX],
+'unpainted_price' => 'nullable|numeric|min:0',
             'featured' => 'nullable|boolean',
             'status' => 'nullable|in:active,inactive,draft',
             'sku' => 'nullable|string|max:50|unique:products,sku',
@@ -86,6 +91,8 @@ class AdminProductController extends ProductController
             'description' => 'nullable|string',
             'price' => 'sometimes|numeric|min:0',
             'stock' => 'sometimes|integer|min:0',
+            'youtube_url' => ['nullable', 'string', 'max:255', 'regex:' . self::YOUTUBE_URL_REGEX],
+'unpainted_price' => 'nullable|numeric|min:0',
             'featured' => 'nullable|boolean',
             'status' => 'nullable|in:active,inactive,draft',
             'sku' => 'nullable|string|max:50|unique:products,sku,' . $id,
