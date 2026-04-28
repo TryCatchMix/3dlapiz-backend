@@ -51,14 +51,15 @@ class OrderController extends Controller
                 ]);
 
                 foreach ($cart->items as $item) {
-                    $order->items()->create([
-                        'product_id' => $item->product_id,
-                        'quantity' => $item->quantity,
-                        'price' => $item->price,
-                        'product_name' => $item->product->name,
-                        'product_image' => $item->product->image_url,
-                    ]);
-                }
+    $order->items()->create([
+        'product_id'    => $item->product_id,
+        'quantity'      => $item->quantity,
+        'variant'       => $item->variant,
+        'price'         => $item->price,
+        'product_name'  => $item->product->name,
+        'product_image' => $item->product->image_url,
+    ]);
+}
 
                 return $order;
             });
