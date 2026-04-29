@@ -11,6 +11,7 @@ use App\Http\Controllers\ProductController;
 use App\Http\Controllers\ProductImageController;
 use App\Http\Controllers\ShippingController;
 use App\Http\Controllers\StripeController;
+use App\Http\Controllers\Admin\AdminOrderController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -136,6 +137,13 @@ Route::middleware(['auth:sanctum', 'admin'])->prefix('admin')->group(function ()
         Route::put('/{id}', [AdminShippingRateController::class, 'update']);
         Route::delete('/{id}', [AdminShippingRateController::class, 'destroy']);
     });
+
+    Route::prefix('orders')->group(function () {
+    Route::get('/', [AdminOrderController::class, 'index']);
+    Route::get('/{id}', [AdminOrderController::class, 'show']);
+    Route::patch('/{id}/tracking', [AdminOrderController::class, 'setTracking']);
+    Route::patch('/{id}/status', [AdminOrderController::class, 'updateStatus']);
+});
 
 });
 
