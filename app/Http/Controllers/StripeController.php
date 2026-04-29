@@ -181,14 +181,14 @@ class StripeController extends Controller
             }
 
             if ($session->payment_status === 'paid' && $order->payment_status !== 'paid') {
-                $order->update([
-                    'status' => 'paid',
-                    'payment_status' => 'paid',
-                    'payment_intent' => $session->payment_intent
-                ]);
+    $order->update([
+        'status' => 'paid',
+        'payment_status' => 'paid',
+        'payment_intent' => $session->payment_intent,
+    ]);
 
-                // Aquí puedes agregar notificaciones, emails, etc.
-            }
+    $this->notifyOrderPaid($order);
+}
 
             return response()->json([
                 'success' => true,
@@ -241,20 +241,21 @@ class StripeController extends Controller
         return response()->json(['status' => 'success']);
     }
 
-    private function handleCheckoutCompleted($session)
-    {
-        $order = Order::where('stripe_session_id', $session->id)->first();
+    private function handleCheckoutCompleted($session): void
+{
+    $order = Order::where('stripe_session_id', $session->id)->first();
+    if (!$order) return;
 
-        if ($order && $order->payment_status !== 'paid') {
-            $order->update([
-                'status' => 'paid',
-                'payment_status' => 'paid',
-                'payment_intent' => $session->payment_intent
-            ]);
+    if ($order->payment_status !== 'paid') {
+        $order->update([
+            'status' => 'paid',
+            'payment_status' => 'paid',
+            'payment_intent' => $session->payment_intent ?? null,
+        ]);
 
-            Log::info('Order marked as paid', ['order_id' => $order->id]);
-        }
+        $this->notifyOrderPaid($order);
     }
+}
 
     private function handleCheckoutExpired($session)
     {
@@ -334,4 +335,25 @@ class StripeController extends Controller
 
         return $lineItems;
     }
+
+    private function notifyOrderPaid(\App\Models\Order $order): void
+{
+    try {
+        // Cliente
+        if ($order->user) {
+            $order->user->notify(new \App\Notifications\OrderPaidCustomer($order));
+        }
+
+        // Admin
+        $adminEmail = config('mail.admin_notification_email');
+        if ($adminEmail) {
+            \Illuminate\Support\Facades\Notification::route('mail', $adminEmail)
+                ->notify(new \App\Notifications\OrderPaidAdmin($order));
+        }
+    } catch (\Throwable $e) {
+        \Illuminate\Support\Facades\Log::error('Error enviando notificación de pedido pagado: ' . $e->getMessage(), [
+            'order_id' => $order->id,
+        ]);
+    }
+}
 }
