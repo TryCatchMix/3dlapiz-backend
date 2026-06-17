@@ -121,6 +121,7 @@ Route::middleware(['auth:sanctum', 'admin'])->prefix('admin')->group(function ()
         Route::get('/{id}/statistics', [AdminProductController::class, 'statistics']);
         Route::post('/{id}/duplicate', [AdminProductController::class, 'duplicate']);
         Route::post('/{id}/restore', [AdminProductController::class, 'restore']);
+        Route::delete('/{id}', [AdminProductController::class, 'destroy']);
     });
 
     // Precios de envío por país

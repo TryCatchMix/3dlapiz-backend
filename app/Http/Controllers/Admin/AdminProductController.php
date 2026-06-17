@@ -257,4 +257,18 @@ private const YOUTUBE_URL_REGEX =
 
         return response()->json($metrics);
     }
+
+    public function destroy($id)
+{
+    $this->validateUuid($id);
+    $product = Product::findOrFail($id);
+
+    // Soft delete: el producto desaparece del catálogo pero queda en BD
+    $product->delete();
+
+    return response()->json([
+        'message' => 'Producto eliminado correctamente',
+        'product_id' => $id,
+    ]);
+}
 }
