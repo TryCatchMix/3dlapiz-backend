@@ -105,13 +105,6 @@ Route::middleware('auth:sanctum')->group(function () {
 });
 
 
-/*
-|--------------------------------------------------------------------------
-| RUTAS DE ADMINISTRADOR (auth:sanctum + admin)
-|--------------------------------------------------------------------------
-| Todo lo que esté aquí dentro requiere usuario autenticado con rol admin.
-| El middleware `admin` devuelve 403 a cualquier usuario sin permisos.
-*/
 
 Route::middleware(['auth:sanctum', 'admin'])->prefix('admin')->group(function () {
 
@@ -128,6 +121,7 @@ Route::middleware(['auth:sanctum', 'admin'])->prefix('admin')->group(function ()
         Route::get('/{id}/statistics', [AdminProductController::class, 'statistics']);
         Route::post('/{id}/duplicate', [AdminProductController::class, 'duplicate']);
         Route::post('/{id}/restore', [AdminProductController::class, 'restore']);
+        Route::delete('/{id}', [AdminProductController::class, 'destroy']);
     });
 
     // Precios de envío por país
@@ -139,24 +133,13 @@ Route::middleware(['auth:sanctum', 'admin'])->prefix('admin')->group(function ()
     });
 
     Route::prefix('orders')->group(function () {
-    Route::get('/', [AdminOrderController::class, 'index']);
-    Route::get('/{id}', [AdminOrderController::class, 'show']);
-    Route::patch('/{id}/tracking', [AdminOrderController::class, 'setTracking']);
-    Route::patch('/{id}/status', [AdminOrderController::class, 'updateStatus']);
+        Route::get('/', [AdminOrderController::class, 'index']);
+        Route::get('/{id}', [AdminOrderController::class, 'show']);
+        Route::patch('/{id}/tracking', [AdminOrderController::class, 'setTracking']);
+        Route::patch('/{id}/status', [AdminOrderController::class, 'updateStatus']);
+    });
 });
 
-});
-
-
-/*
-|--------------------------------------------------------------------------
-| RUTAS DE ESCRITURA DE PRODUCTOS (legacy)
-|--------------------------------------------------------------------------
-| Estas rutas estaban antes en /products bajo solo auth:sanctum. Las paso
-| también a admin: si quieres que un usuario normal pueda llamar a
-| POST /products no tiene mucho sentido en una tienda. Si en algún momento
-| eso cambia, mueves estas rutas al grupo solo-auth de arriba.
-*/
 
 Route::middleware(['auth:sanctum', 'admin'])->prefix('products')->group(function () {
     Route::post('/', [ProductController::class, 'store']);
