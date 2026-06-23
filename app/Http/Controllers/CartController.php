@@ -313,4 +313,47 @@ class CartController extends Controller
 
         return response()->json($products);
     }
+
+    public function removeItem(Request $request)
+{
+    $validated = $request->validate([
+        'product_id' => 'required|exists:products,id',
+        'variant'    => 'required|in:painted,unpainted',
+    ]);
+
+    try {
+        DB::beginTransaction();
+
+        $cart = Cart::where('user_id', Auth::id())
+            ->where('status', 'active')
+            ->first();
+
+        if (!$cart) {
+            return response()->json(['error' => 'Carrito no encontrado'], 404);
+        }
+
+        $deleted = CartItem::where('cart_id', $cart->id)
+            ->where('product_id', $validated['product_id'])
+            ->where('variant', $validated['variant'])
+            ->delete();
+
+        // Recalcular total
+        $cart->total_amount = $cart->items()->get()
+            ->sum(fn ($item) => $item->price * $item->quantity);
+        $cart->save();
+
+        DB::commit();
+
+        return response()->json([
+            'message' => 'Producto eliminado del carrito',
+            'deleted' => $deleted,
+        ]);
+
+    } catch (Exception $e) {
+        DB::rollBack();
+        return response()->json([
+            'error' => 'Error al eliminar producto del carrito: ' . $e->getMessage()
+        ], 500);
+    }
+}
 }
