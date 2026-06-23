@@ -107,42 +107,53 @@ private const YOUTUBE_URL_REGEX =
         return response()->json($product->fresh(['images']));
     }
 
-    public function manageImages(Request $request, $id)
-    {
-        $this->validateUuid($id);
-        $product = Product::findOrFail($id);
+public function manageImages(Request $request, $id)
+{
+    $this->validateUuid($id);
+    $product = Product::findOrFail($id);
 
-        $validated = $request->validate([
-            'images' => 'nullable|array',
-            'images.*' => 'image|mimes:jpeg,png,jpg,gif|max:2048',
-            'deleted_images' => 'nullable|array',
-            'deleted_images.*' => 'exists:product_images,id',
-        ]);
+    $validated = $request->validate([
+        'images' => 'nullable|array|max:10',
+        'images.*' => 'image|mimes:jpeg,png,jpg,gif,webp|max:4096',
+        'deleted_images' => 'nullable|array',
+        'deleted_images.*' => 'exists:product_images,id',
+    ]);
 
-        if (!empty($validated['deleted_images'])) {
-            $imagesToDelete = ProductImage::whereIn('id', $validated['deleted_images'])
-                ->where('product_id', $id)
-                ->get();
+    // 1) Borrar imágenes marcadas
+    if (!empty($validated['deleted_images'])) {
+        $imagesToDelete = ProductImage::whereIn('id', $validated['deleted_images'])
+            ->where('product_id', $id)
+            ->get();
 
-            foreach ($imagesToDelete as $image) {
-                Storage::disk('public')->delete($image->path);
-                $image->delete();
+        foreach ($imagesToDelete as $image) {
+            $physicalPath = public_path($image->image_url);
+            if (file_exists($physicalPath)) {
+                @unlink($physicalPath);
             }
+            $image->delete();
         }
-
-        if ($request->hasFile('images')) {
-            foreach ($request->file('images') as $image) {
-                $path = $image->store('products', 'public');
-
-                ProductImage::create([
-                    'product_id' => $id,
-                    'image_url' => $path,
-                ]);
-            }
-        }
-
-        return response()->json($product->fresh(['images']));
     }
+
+    // 2) Subir nuevas imágenes
+    if ($request->hasFile('images')) {
+        $destination = public_path('images/3d_figures');
+        if (!file_exists($destination)) {
+            mkdir($destination, 0775, true);
+        }
+
+        foreach ($request->file('images') as $image) {
+            $filename = time() . '_' . strtolower($image->getClientOriginalName());
+            $image->move($destination, $filename);
+
+            ProductImage::create([
+                'product_id' => $id,
+                'image_url'  => 'images/3d_figures/' . $filename,
+            ]);
+        }
+    }
+
+    return response()->json($product->fresh(['images']));
+}
 
     public function updateStatus(Request $request, $id)
     {
