@@ -137,7 +137,7 @@ class StripeController extends Controller
     'payment_method_types' => ['card'],
     'line_items'           => $lineItems,
     'mode'                 => 'payment',
-    'success_url'          => rtrim(config('app.frontend_url'), '/') . '/checkout?session_id={CHECKOUT_SESSION_ID}',
+    'success_url' => rtrim(config('app.frontend_url'), '/') . '/order-success?session_id={CHECKOUT_SESSION_ID}',
     'cancel_url'           => rtrim(config('app.frontend_url'), '/') . '/cart',
     'customer_email'       => $user->email,
 ]);
