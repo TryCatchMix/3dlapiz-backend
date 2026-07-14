@@ -42,133 +42,133 @@ class CartController extends Controller
     }
 
     public function addToCart(Request $request)
-{
-    $request->validate([
-        'product_id' => 'required|exists:products,id',
-        'quantity'   => 'required|integer|min:1',
-        'variant'    => 'nullable|in:painted,unpainted',
-    ]);
-
-    $variant = $request->input('variant', 'painted');
-
-    try {
-        DB::beginTransaction();
-
-        $cart = Cart::firstOrCreate([
-            'user_id' => Auth::id(),
-            'status'  => 'active'
-        ], [
-            'id' => Str::uuid(),
-            'total_amount' => 0
+    {
+        $request->validate([
+            'product_id' => 'required|exists:products,id',
+            'quantity'   => 'required|integer|min:1',
+            'variant'    => 'nullable|in:painted,unpainted',
         ]);
 
-        $product = Product::findOrFail($request->product_id);
+        $variant = $request->input('variant', 'painted');
 
-        // Seguridad: precio calculado en backend, nunca confiar en input
         try {
-            $price = $product->priceForVariant($variant);
-        } catch (\InvalidArgumentException $e) {
-            DB::rollBack();
-            return response()->json(['error' => $e->getMessage()], 422);
-        }
+            DB::beginTransaction();
 
-        $cartItem = CartItem::where('cart_id', $cart->id)
-            ->where('product_id', $product->id)
-            ->where('variant', $variant)
-            ->first();
-
-        if ($cartItem) {
-            $newQuantity = $cartItem->quantity + $request->quantity;
-            if ($newQuantity > $product->stock) {
-                DB::rollBack();
-                return response()->json(['error' => 'No hay suficiente stock disponible'], 422);
-            }
-            $cartItem->quantity = $newQuantity;
-            $cartItem->price = $price; // re-snapshot por si cambió
-            $cartItem->save();
-        } else {
-            if ($request->quantity > $product->stock) {
-                DB::rollBack();
-                return response()->json(['error' => 'No hay suficiente stock disponible'], 422);
-            }
-            $cartItem = new CartItem([
+            $cart = Cart::firstOrCreate([
+                'user_id' => Auth::id(),
+                'status'  => 'active'
+            ], [
                 'id' => Str::uuid(),
-                'product_id' => $product->id,
-                'quantity'   => $request->quantity,
-                'variant'    => $variant,
-                'price'      => $price,
+                'total_amount' => 0
             ]);
-            $cart->items()->save($cartItem);
+
+            $product = Product::findOrFail($request->product_id);
+
+            // Seguridad: precio calculado en backend, nunca confiar en input
+            try {
+                $price = $product->priceForVariant($variant);
+            } catch (\InvalidArgumentException $e) {
+                DB::rollBack();
+                return response()->json(['error' => $e->getMessage()], 422);
+            }
+
+            $cartItem = CartItem::where('cart_id', $cart->id)
+                ->where('product_id', $product->id)
+                ->where('variant', $variant)
+                ->first();
+
+            if ($cartItem) {
+                $newQuantity = $cartItem->quantity + $request->quantity;
+                if ($newQuantity > $product->stock) {
+                    DB::rollBack();
+                    return response()->json(['error' => 'No hay suficiente stock disponible'], 422);
+                }
+                $cartItem->quantity = $newQuantity;
+                $cartItem->price = $price; // re-snapshot por si cambió
+                $cartItem->save();
+            } else {
+                if ($request->quantity > $product->stock) {
+                    DB::rollBack();
+                    return response()->json(['error' => 'No hay suficiente stock disponible'], 422);
+                }
+                $cartItem = new CartItem([
+                    'id' => Str::uuid(),
+                    'product_id' => $product->id,
+                    'quantity'   => $request->quantity,
+                    'variant'    => $variant,
+                    'price'      => $price,
+                ]);
+                $cart->items()->save($cartItem);
+            }
+
+            $cart->total_amount = $cart->items()->get()->sum(fn($item) => $item->price * $item->quantity);
+            $cart->save();
+
+            DB::commit();
+
+            return response()->json([
+                'message'   => 'Producto agregado al carrito',
+                'cart_item' => $cartItem->load('product'),
+            ]);
+        } catch (Exception $e) {
+            DB::rollBack();
+            return response()->json(['error' => 'Error al agregar producto al carrito: ' . $e->getMessage()], 500);
         }
-
-        $cart->total_amount = $cart->items()->get()->sum(fn($item) => $item->price * $item->quantity);
-        $cart->save();
-
-        DB::commit();
-
-        return response()->json([
-            'message'   => 'Producto agregado al carrito',
-            'cart_item' => $cartItem->load('product'),
-        ]);
-    } catch (Exception $e) {
-        DB::rollBack();
-        return response()->json(['error' => 'Error al agregar producto al carrito: ' . $e->getMessage()], 500);
     }
-}
 
     public function updateCartItem(Request $request)
-{
-    $request->validate([
-        'product_id' => 'required|exists:products,id',
-        'quantity'   => 'required|integer|min:1',
-        'variant'    => 'nullable|in:painted,unpainted',
-    ]);
-
-    $variant = $request->input('variant', 'painted');
-
-    try {
-        DB::beginTransaction();
-
-        $cart = Cart::where('user_id', Auth::id())
-            ->where('status', 'active')
-            ->first();
-
-        if (!$cart) {
-            return response()->json(['error' => 'Carrito no encontrado'], 404);
-        }
-
-        $cartItem = CartItem::where('cart_id', $cart->id)
-            ->where('product_id', $request->product_id)
-            ->where('variant', $variant)
-            ->first();
-
-        if (!$cartItem) {
-            return response()->json(['error' => 'Producto no encontrado en el carrito'], 404);
-        }
-
-        $product = Product::findOrFail($request->product_id);
-
-        if ($request->quantity > $product->stock) {
-            return response()->json(['error' => 'No hay suficiente stock disponible'], 422);
-        }
-
-        $cartItem->quantity = $request->quantity;
-        $cartItem->save();
-
-        $cart->total_amount = $cart->items()->get()->sum(fn($item) => $item->price * $item->quantity);
-        $cart->save();
-
-        DB::commit();
-
-        return response()->json([
-            'message'   => 'Cantidad actualizada',
-            'cart_item' => $cartItem->load('product'),
+    {
+        $request->validate([
+            'product_id' => 'required|exists:products,id',
+            'quantity'   => 'required|integer|min:1',
+            'variant'    => 'nullable|in:painted,unpainted',
         ]);
-    } catch (Exception $e) {
-        DB::rollBack();
-        return response()->json(['error' => 'Error al actualizar el carrito: ' . $e->getMessage()], 500);
+
+        $variant = $request->input('variant', 'painted');
+
+        try {
+            DB::beginTransaction();
+
+            $cart = Cart::where('user_id', Auth::id())
+                ->where('status', 'active')
+                ->first();
+
+            if (!$cart) {
+                return response()->json(['error' => 'Carrito no encontrado'], 404);
+            }
+
+            $cartItem = CartItem::where('cart_id', $cart->id)
+                ->where('product_id', $request->product_id)
+                ->where('variant', $variant)
+                ->first();
+
+            if (!$cartItem) {
+                return response()->json(['error' => 'Producto no encontrado en el carrito'], 404);
+            }
+
+            $product = Product::findOrFail($request->product_id);
+
+            if ($request->quantity > $product->stock) {
+                return response()->json(['error' => 'No hay suficiente stock disponible'], 422);
+            }
+
+            $cartItem->quantity = $request->quantity;
+            $cartItem->save();
+
+            $cart->total_amount = $cart->items()->get()->sum(fn($item) => $item->price * $item->quantity);
+            $cart->save();
+
+            DB::commit();
+
+            return response()->json([
+                'message'   => 'Cantidad actualizada',
+                'cart_item' => $cartItem->load('product'),
+            ]);
+        } catch (Exception $e) {
+            DB::rollBack();
+            return response()->json(['error' => 'Error al actualizar el carrito: ' . $e->getMessage()], 500);
+        }
     }
-}
 
     public function removeCartItem($productId)
     {
@@ -203,7 +203,6 @@ class CartController extends Controller
             return response()->json([
                 'message' => 'Producto eliminado del carrito'
             ]);
-
         } catch (Exception $e) {
             DB::rollBack();
             return response()->json(['error' => 'Error al eliminar producto del carrito: ' . $e->getMessage()], 500);
@@ -232,7 +231,6 @@ class CartController extends Controller
             return response()->json([
                 'message' => 'Carrito vaciado correctamente'
             ]);
-
         } catch (Exception $e) {
             DB::rollBack();
             return response()->json(['error' => 'Error al vaciar el carrito: ' . $e->getMessage()], 500);
@@ -240,74 +238,74 @@ class CartController extends Controller
     }
 
     public function syncCart(Request $request)
-{
-    $request->validate([
-        'items'                => 'required|array',
-        'items.*.product_id'   => 'required|exists:products,id',
-        'items.*.quantity'     => 'required|integer|min:1',
-        'items.*.variant'      => 'nullable|in:painted,unpainted',
-    ]);
-
-    try {
-        DB::beginTransaction();
-
-        $cart = Cart::firstOrCreate([
-            'user_id' => Auth::id(),
-            'status'  => 'active'
-        ], [
-            'id' => Str::uuid(),
-            'total_amount' => 0
+    {
+        $request->validate([
+            'items'                => 'required|array',
+            'items.*.product_id'   => 'required|exists:products,id',
+            'items.*.quantity'     => 'required|integer|min:1',
+            'items.*.variant'      => 'nullable|in:painted,unpainted',
         ]);
 
-        $cart->items()->delete();
+        try {
+            DB::beginTransaction();
 
-        $totalAmount = 0;
+            $cart = Cart::firstOrCreate([
+                'user_id' => Auth::id(),
+                'status'  => 'active'
+            ], [
+                'id' => Str::uuid(),
+                'total_amount' => 0
+            ]);
 
-        foreach ($request->items as $item) {
-            $product = Product::findOrFail($item['product_id']);
-            $variant = $item['variant'] ?? 'painted';
+            $cart->items()->delete();
 
-            try {
-                $price = $product->priceForVariant($variant);
-            } catch (\InvalidArgumentException $e) {
-                continue; // ignoramos variantes no válidas en sync
+            $totalAmount = 0;
+
+            foreach ($request->items as $item) {
+                $product = Product::findOrFail($item['product_id']);
+                $variant = $item['variant'] ?? 'painted';
+
+                try {
+                    $price = $product->priceForVariant($variant);
+                } catch (\InvalidArgumentException $e) {
+                    continue; // ignoramos variantes no válidas en sync
+                }
+
+                $quantity = min($item['quantity'], $product->stock);
+                if ($quantity < 1) continue;
+
+                $cartItem = new CartItem([
+                    'id'         => Str::uuid(),
+                    'product_id' => $product->id,
+                    'quantity'   => $quantity,
+                    'variant'    => $variant,
+                    'price'      => $price,
+                ]);
+                $cart->items()->save($cartItem);
+
+                $totalAmount += $price * $quantity;
             }
 
-            $quantity = min($item['quantity'], $product->stock);
-            if ($quantity < 1) continue;
+            $cart->total_amount = $totalAmount;
+            $cart->save();
 
-            $cartItem = new CartItem([
-                'id'         => Str::uuid(),
-                'product_id' => $product->id,
-                'quantity'   => $quantity,
-                'variant'    => $variant,
-                'price'      => $price,
+            DB::commit();
+
+            return response()->json([
+                'message' => 'Carrito sincronizado correctamente',
+                'cart'    => $cart->load('items.product'),
             ]);
-            $cart->items()->save($cartItem);
-
-            $totalAmount += $price * $quantity;
+        } catch (Exception $e) {
+            DB::rollBack();
+            return response()->json(['error' => 'Error al sincronizar el carrito: ' . $e->getMessage()], 500);
         }
-
-        $cart->total_amount = $totalAmount;
-        $cart->save();
-
-        DB::commit();
-
-        return response()->json([
-            'message' => 'Carrito sincronizado correctamente',
-            'cart'    => $cart->load('items.product'),
-        ]);
-    } catch (Exception $e) {
-        DB::rollBack();
-        return response()->json(['error' => 'Error al sincronizar el carrito: ' . $e->getMessage()], 500);
     }
-}
 
     public function getProductsDetails(Request $request)
     {
         $request->validate([
-            'ids' => 'required|array',
-            'ids.*' => 'required|exists:products,id'
+            'ids' => 'required|array|max:50',
+            'ids.*' => 'required|uuid|exists:products,id'
         ]);
 
         $products = Product::with('images')->whereIn('id', $request->ids)->get();
@@ -316,75 +314,74 @@ class CartController extends Controller
     }
 
     public function removeItem(Request $request)
-{
-    $validated = $request->validate([
-        'product_id' => 'required|exists:products,id',
-        'variant'    => 'required|in:painted,unpainted',
-    ]);
+    {
+        $validated = $request->validate([
+            'product_id' => 'required|exists:products,id',
+            'variant'    => 'required|in:painted,unpainted',
+        ]);
 
-    try {
-        DB::beginTransaction();
+        try {
+            DB::beginTransaction();
 
-        $cart = Cart::where('user_id', Auth::id())
-            ->where('status', 'active')
-            ->first();
+            $cart = Cart::where('user_id', Auth::id())
+                ->where('status', 'active')
+                ->first();
 
-        if (!$cart) {
-            return response()->json(['error' => 'Carrito no encontrado'], 404);
+            if (!$cart) {
+                return response()->json(['error' => 'Carrito no encontrado'], 404);
+            }
+
+            $deleted = CartItem::where('cart_id', $cart->id)
+                ->where('product_id', $validated['product_id'])
+                ->where('variant', $validated['variant'])
+                ->delete();
+
+            // Recalcular total
+            $cart->total_amount = $cart->items()->get()
+                ->sum(fn($item) => $item->price * $item->quantity);
+            $cart->save();
+
+            DB::commit();
+
+            return response()->json([
+                'message' => 'Producto eliminado del carrito',
+                'deleted' => $deleted,
+            ]);
+        } catch (Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'error' => 'Error al eliminar producto del carrito: ' . $e->getMessage()
+            ], 500);
         }
+    }
 
-        $deleted = CartItem::where('cart_id', $cart->id)
-            ->where('product_id', $validated['product_id'])
-            ->where('variant', $validated['variant'])
-            ->delete();
-
-        // Recalcular total
-        $cart->total_amount = $cart->items()->get()
-            ->sum(fn ($item) => $item->price * $item->quantity);
-        $cart->save();
-
-        DB::commit();
-
-        return response()->json([
-            'message' => 'Producto eliminado del carrito',
-            'deleted' => $deleted,
+    public function validateCode(Request $request, DiscountService $service)
+    {
+        $validated = $request->validate([
+            'code' => ['required', 'string', 'max:30'],
+            'subtotal' => ['required', 'numeric', 'min:0'],
         ]);
 
-    } catch (Exception $e) {
-        DB::rollBack();
-        return response()->json([
-            'error' => 'Error al eliminar producto del carrito: ' . $e->getMessage()
-        ], 500);
+        try {
+            $discount = $service->validate(
+                $validated['code'],
+                $request->user()->id,
+                (float) $validated['subtotal']
+            );
+
+            $amount = $service->amountFor($discount, (float) $validated['subtotal']);
+
+            return response()->json([
+                'valid' => true,
+                'code' => $discount->code,
+                'percentage' => $discount->percentage,
+                'discount_amount' => $amount,
+            ]);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json([
+                'valid' => false,
+                'message' => $e->getMessage(),
+            ], 422);
+        }
     }
-}
-
-public function validateCode(Request $request, DiscountService $service)
-{
-    $validated = $request->validate([
-        'code' => ['required', 'string', 'max:30'],
-        'subtotal' => ['required', 'numeric', 'min:0'],
-    ]);
-
-    try {
-        $discount = $service->validate(
-            $validated['code'],
-            $request->user()->id,
-            (float) $validated['subtotal']
-        );
-
-        $amount = $service->amountFor($discount, (float) $validated['subtotal']);
-
-        return response()->json([
-            'valid' => true,
-            'code' => $discount->code,
-            'percentage' => $discount->percentage,
-            'discount_amount' => $amount,
-        ]);
-    } catch (\InvalidArgumentException $e) {
-        return response()->json([
-            'valid' => false,
-            'message' => $e->getMessage(),
-        ], 422);
-    }
-}
 }

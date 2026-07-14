@@ -18,7 +18,7 @@ class OrderController extends Controller
     {
         Stripe::setApiKey(config('services.stripe.secret'));
     }
-
+/* //TODOO
     public function checkout(Request $request)
     {
         $cart = Cart::with('items.product')->where('user_id', auth()->id())->firstOrFail();
@@ -192,6 +192,7 @@ class OrderController extends Controller
         }
     }
 
+
     public function stripeCancel(Request $request)
     {
         $orderId = $request->get('order_id');
@@ -210,6 +211,7 @@ class OrderController extends Controller
             'message' => 'Payment was cancelled'
         ]);
     }
+    */
 
     public function getUserOrders()
     {

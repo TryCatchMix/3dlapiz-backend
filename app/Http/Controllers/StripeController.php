@@ -206,55 +206,63 @@ public function createCheckoutSession(
         return response()->json(['error' => 'Error creando el pedido.'], 500);
     }
 }
-    public function confirmPayment(Request $request)
-    {
-        $request->validate([
-            'session_id' => 'required|string'
-        ]);
-
-        try {
-            $session = Session::retrieve($request->session_id);
-
-            if (!$session) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Sesión no encontrada'
-                ], 404);
-            }
-
-            $order = Order::where('stripe_session_id', $session->id)->first();
-
-            if (!$order) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Orden no encontrada'
-                ], 404);
-            }
-
-            if ($session->payment_status === 'paid' && $order->payment_status !== 'paid') {
-    $order->update([
-        'status' => 'paid',
-        'payment_status' => 'paid',
-        'payment_intent' => $session->payment_intent,
+public function confirmPayment(Request $request)
+{
+    $request->validate([
+        'session_id' => 'required|string|max:200'
     ]);
 
-    $this->notifyOrderPaid($order);
-}
+    try {
+        $session = Session::retrieve($request->session_id);
 
-            return response()->json([
-                'success' => true,
-                'order' => $order->load('items')
-            ]);
-
-        } catch (ApiErrorException $e) {
-            Log::error('Stripe confirmation error: ' . $e->getMessage());
-
+        if (!$session) {
             return response()->json([
                 'success' => false,
-                'message' => 'Error al confirmar el pago'
-            ], 500);
+                'message' => 'Sesión no encontrada'
+            ], 404);
         }
+
+        $order = Order::where('stripe_session_id', $session->id)->first();
+
+        if (!$order) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Orden no encontrada'
+            ], 404);
+        }
+
+        // Verificar que el pedido pertenece al usuario autenticado
+        if ($order->user_id !== $request->user()->id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No autorizado'
+            ], 403);
+        }
+
+        if ($session->payment_status === 'paid' && $order->payment_status !== 'paid') {
+            $order->update([
+                'status' => 'paid',
+                'payment_status' => 'paid',
+                'payment_intent' => $session->payment_intent,
+            ]);
+
+            $this->notifyOrderPaid($order);
+        }
+
+        return response()->json([
+            'success' => true,
+            'order' => $order->load('items')
+        ]);
+
+    } catch (ApiErrorException $e) {
+        Log::error('Stripe confirmation error: ' . $e->getMessage());
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Error al confirmar el pago'
+        ], 500);
     }
+}
 
     public function handleWebhook(Request $request)
     {
@@ -320,7 +328,7 @@ public function createCheckoutSession(
             Log::info('Order marked as failed due to session expiry', ['order_id' => $order->id]);
         }
     }
-
+/* POSIBLE BORRAR SI TODO VA BIEN
     public function success(Request $request)
     {
         $session_id = $request->get('session_id');
@@ -351,41 +359,6 @@ public function createCheckoutSession(
     /**
      * Construye los line items para Stripe basado en la request
      */
-    private function buildLineItems(Request $request): array
-    {
-        $lineItems = [];
-
-        // Agregar productos
-        foreach ($request->items as $item) {
-            $lineItems[] = [
-                'price_data' => [
-                    'currency' => 'eur',
-                    'product_data' => [
-                        'name' => $item['name'],
-                        'images' => isset($item['image_url']) ? [$item['image_url']] : [],
-                    ],
-                    'unit_amount' => (int)($item['price'] * 100),
-                ],
-                'quantity' => $item['quantity'],
-            ];
-        }
-
-        // Agregar envío como un line item separado
-        if ($request->shipping_method['price'] > 0) {
-            $lineItems[] = [
-                'price_data' => [
-                    'currency' => 'eur',
-                    'product_data' => [
-                        'name' => $request->shipping_method['name'],
-                    ],
-                    'unit_amount' => (int)($request->shipping_method['price'] * 100),
-                ],
-                'quantity' => 1,
-            ];
-        }
-
-        return $lineItems;
-    }
 
     private function notifyOrderPaid(\App\Models\Order $order): void
 {

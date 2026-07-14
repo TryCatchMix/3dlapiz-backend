@@ -47,11 +47,6 @@ Route::post('/reset-password', [AuthController::class, 'resetPassword'])
 Route::get('/email/verify/{id}/{hash}', [AuthController::class, 'verifyEmail'])
     ->name('verification.verify');
 
-// Stripe redirecciones (no webhooks)
-Route::prefix('stripe')->group(function () {
-    Route::get('/success', [StripeController::class, 'success'])->name('stripe.success');
-    Route::get('/cancel', [StripeController::class, 'cancel'])->name('stripe.cancel');
-});
 
 // Contenido público — throttle generoso (120/min)
 Route::middleware('throttle:public-api')->group(function () {
@@ -123,7 +118,6 @@ Route::middleware(['auth:sanctum', 'throttle:user-api'])->group(function () {
         Route::get('/my-orders', [OrderController::class, 'getUserOrders']);
         Route::get('/{order}', [OrderController::class, 'getOrder']);
         Route::post('/{order}/cancel', [OrderController::class, 'cancelOrder']);
-        Route::patch('/{order}/status', [OrderController::class, 'updateStatus']);
     });
 
     // Códigos de descuento — throttle propio contra brute force
