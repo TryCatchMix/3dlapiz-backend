@@ -19,8 +19,11 @@ class StripeController extends Controller
         Stripe::setApiKey(config('services.stripe.secret'));
     }
 
-    public function createCheckoutSession(Request $request, \App\Services\ShippingService $shipping)
-{
+public function createCheckoutSession(
+    Request $request,
+    \App\Services\ShippingService $shipping,
+    \App\Services\DiscountService $discountService
+) {
     $validated = $request->validate([
         'shipping_info' => 'required|array',
         'shipping_info.fullName' => 'required|string|max:120',
@@ -35,6 +38,8 @@ class StripeController extends Controller
         'items.*.product_id' => 'required|exists:products,id',
         'items.*.quantity' => 'required|integer|min:1',
         'items.*.variant' => 'nullable|in:painted,unpainted',
+
+        'discount_code' => 'nullable|string|max:30',
     ]);
 
     $user = $request->user();
@@ -73,27 +78,64 @@ class StripeController extends Controller
         $subtotal += $price * $item['quantity'];
     }
 
-    $total = $subtotal + $shippingPrice;
+    // 3) Validar código de descuento (si viene) y preparar cupón Stripe
+    $discount = null;
+    $discountAmount = 0;
+    $stripeCouponId = null;
+
+    if (!empty($validated['discount_code'])) {
+        try {
+            $discount = $discountService->validate(
+                $validated['discount_code'],
+                $user->id,
+                $subtotal
+            );
+            $discountAmount = $discountService->amountFor($discount, $subtotal);
+            $stripeCouponId = $discountService->getOrCreateStripeCoupon($discount);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => $e->getMessage()], 422);
+        }
+    }
+
+    // 4) Total final
+    $total = max(0, ($subtotal - $discountAmount) + $shippingPrice);
 
     if ($total < 0.5) {
         return response()->json(['error' => 'El total debe ser al menos 0,50€.'], 422);
     }
 
-    // 3) Crear orden + sesión Stripe en transacción
+    // 5) Crear orden + sesión Stripe en transacción
     try {
-        return DB::transaction(function () use ($user, $validated, $resolvedItems, $shippingPrice, $total) {
+        return DB::transaction(function () use (
+            $user, $validated, $resolvedItems, $shippingPrice, $total,
+            $discount, $discountAmount, $stripeCouponId
+        ) {
             $order = Order::create([
-                'user_id'        => $user->id,
-                'status'         => 'pending',
-                'payment_status' => 'pending',
-                'total'          => $total,
-                'shipping_info'  => $validated['shipping_info'],
+                'user_id'         => $user->id,
+                'status'          => 'pending',
+                'payment_status'  => 'pending',
+                'total'           => $total,
+                'shipping_info'   => $validated['shipping_info'],
                 'shipping_method' => [
                     'country_code' => strtoupper($validated['shipping_info']['country_code']),
                     'price'        => $shippingPrice,
                 ],
+                'discount_code'   => $discount?->code,
+                'discount_amount' => $discountAmount,
             ]);
 
+            // Registrar el uso del código en BD
+            if ($discount) {
+                $discount->uses()->create([
+                    'user_id'           => $user->id,
+                    'order_id'          => $order->id,
+                    'amount_discounted' => $discountAmount,
+                    'used_at'           => now(),
+                ]);
+                $discount->increment('used_count');
+            }
+
+            // Line items para Stripe (precios SIN descuento — Stripe lo aplica con el cupón)
             $lineItems = [];
 
             foreach ($resolvedItems as $r) {
@@ -133,14 +175,24 @@ class StripeController extends Controller
                 ];
             }
 
-            $session = Session::create([
-    'payment_method_types' => ['card'],
-    'line_items'           => $lineItems,
-    'mode'                 => 'payment',
-    'success_url' => rtrim(config('app.frontend_url'), '/') . '/order-success?session_id={CHECKOUT_SESSION_ID}',
-    'cancel_url'           => rtrim(config('app.frontend_url'), '/') . '/cart',
-    'customer_email'       => $user->email,
-]);
+            // Construir params de Stripe
+            $sessionParams = [
+                'payment_method_types' => ['card'],
+                'line_items'           => $lineItems,
+                'mode'                 => 'payment',
+                'success_url'          => rtrim(config('app.frontend_url'), '/') . '/order-success?session_id={CHECKOUT_SESSION_ID}',
+                'cancel_url'           => rtrim(config('app.frontend_url'), '/') . '/cart',
+                'customer_email'       => $user->email,
+            ];
+
+            // Aplicar cupón Stripe si hay descuento
+            if ($stripeCouponId) {
+                $sessionParams['discounts'] = [
+                    ['coupon' => $stripeCouponId],
+                ];
+            }
+
+            $session = Session::create($sessionParams);
 
             $order->update(['stripe_session_id' => $session->id]);
 
@@ -154,7 +206,6 @@ class StripeController extends Controller
         return response()->json(['error' => 'Error creando el pedido.'], 500);
     }
 }
-
     public function confirmPayment(Request $request)
     {
         $request->validate([

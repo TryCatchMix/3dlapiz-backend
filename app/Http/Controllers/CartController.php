@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Cart;
 use App\Models\CartItem;
 use App\Models\Product;
+use App\Services\DiscountService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
@@ -354,6 +355,36 @@ class CartController extends Controller
         return response()->json([
             'error' => 'Error al eliminar producto del carrito: ' . $e->getMessage()
         ], 500);
+    }
+}
+
+public function validateCode(Request $request, DiscountService $service)
+{
+    $validated = $request->validate([
+        'code' => ['required', 'string', 'max:30'],
+        'subtotal' => ['required', 'numeric', 'min:0'],
+    ]);
+
+    try {
+        $discount = $service->validate(
+            $validated['code'],
+            $request->user()->id,
+            (float) $validated['subtotal']
+        );
+
+        $amount = $service->amountFor($discount, (float) $validated['subtotal']);
+
+        return response()->json([
+            'valid' => true,
+            'code' => $discount->code,
+            'percentage' => $discount->percentage,
+            'discount_amount' => $amount,
+        ]);
+    } catch (\InvalidArgumentException $e) {
+        return response()->json([
+            'valid' => false,
+            'message' => $e->getMessage(),
+        ], 422);
     }
 }
 }
