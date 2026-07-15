@@ -2,15 +2,24 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Cart;
+use App\Models\CartItem;
 use App\Models\Order;
 use App\Models\OrderItem;
+use App\Models\Product;
 use App\Models\User;
+use App\Notifications\OrderPaidAdmin;
+use App\Notifications\OrderPaidCustomer;
+use Exception;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Str;
 use Stripe\Checkout\Session;
 use Stripe\Exception\ApiErrorException;
 use Stripe\Stripe;
+use Stripe\Webhook;
 
 class StripeController extends Controller
 {
@@ -19,263 +28,266 @@ class StripeController extends Controller
         Stripe::setApiKey(config('services.stripe.secret'));
     }
 
-public function createCheckoutSession(
-    Request $request,
-    \App\Services\ShippingService $shipping,
-    \App\Services\DiscountService $discountService
-) {
-    $validated = $request->validate([
-        'shipping_info' => 'required|array',
-        'shipping_info.fullName' => 'required|string|max:120',
-        'shipping_info.email' => 'required|email',
-        'shipping_info.address' => 'required|string|max:255',
-        'shipping_info.city' => 'required|string|max:100',
-        'shipping_info.postalCode' => 'required|string|max:20',
-        'shipping_info.country_code' => ['required', 'string', 'size:2', 'regex:/^[A-Za-z]{2}$/'],
-        'shipping_info.phone' => 'required|string|max:30',
+    public function createCheckoutSession(
+        Request $request,
+        \App\Services\ShippingService $shipping,
+        \App\Services\DiscountService $discountService
+    ) {
+        $validated = $request->validate([
+            'shipping_info' => 'required|array',
+            'shipping_info.fullName' => 'required|string|max:120',
+            'shipping_info.email' => 'required|email',
+            'shipping_info.address' => 'required|string|max:255',
+            'shipping_info.city' => 'required|string|max:100',
+            'shipping_info.postalCode' => 'required|string|max:20',
+            'shipping_info.country_code' => ['required', 'string', 'size:2', 'regex:/^[A-Za-z]{2}$/'],
+            'shipping_info.phone' => ['required', 'string', 'max:30', 'regex:/^\+?[\d\s\-().]{7,20}$/'],
 
-        'items' => 'required|array|min:1',
-        'items.*.product_id' => 'required|exists:products,id',
-        'items.*.quantity' => 'required|integer|min:1',
-        'items.*.variant' => 'nullable|in:painted,unpainted',
+            'items' => 'required|array|min:1',
+            'items.*.product_id' => 'required|exists:products,id',
+            'items.*.quantity' => 'required|integer|min:1',
+            'items.*.variant' => 'nullable|in:painted,unpainted',
 
-        'discount_code' => 'nullable|string|max:30',
-    ]);
-
-    $user = $request->user();
-
-    // 1) Precio de envío recalculado en backend
-    try {
-        $shippingPrice = $shipping->priceFor($validated['shipping_info']['country_code']);
-    } catch (\InvalidArgumentException $e) {
-        return response()->json(['error' => $e->getMessage()], 422);
-    }
-
-    // 2) Resolver productos y calcular precios reales (nunca confiar en el frontend)
-    $productIds = collect($validated['items'])->pluck('product_id')->unique()->values();
-    $products = \App\Models\Product::with('images')->whereIn('id', $productIds)->get()->keyBy('id');
-
-    $resolvedItems = [];
-    $subtotal = 0;
-
-    foreach ($validated['items'] as $item) {
-        $product = $products->get($item['product_id']);
-        if (!$product) {
-            return response()->json(['error' => "Producto no encontrado: {$item['product_id']}"], 422);
-        }
-        if ($product->stock < $item['quantity']) {
-            return response()->json(['error' => "Stock insuficiente para {$product->name}"], 422);
-        }
-
-        $variant = $item['variant'] ?? 'painted';
-        try {
-            $price = $product->priceForVariant($variant);
-        } catch (\InvalidArgumentException $e) {
-            return response()->json(['error' => $e->getMessage()], 422);
-        }
-
-        $resolvedItems[] = compact('product', 'variant', 'price') + ['quantity' => $item['quantity']];
-        $subtotal += $price * $item['quantity'];
-    }
-
-    // 3) Validar código de descuento (si viene) y preparar cupón Stripe
-    $discount = null;
-    $discountAmount = 0;
-    $stripeCouponId = null;
-
-    if (!empty($validated['discount_code'])) {
-        try {
-            $discount = $discountService->validate(
-                $validated['discount_code'],
-                $user->id,
-                $subtotal
-            );
-            $discountAmount = $discountService->amountFor($discount, $subtotal);
-            $stripeCouponId = $discountService->getOrCreateStripeCoupon($discount);
-        } catch (\InvalidArgumentException $e) {
-            return response()->json(['error' => $e->getMessage()], 422);
-        }
-    }
-
-    // 4) Total final
-    $total = max(0, ($subtotal - $discountAmount) + $shippingPrice);
-
-    if ($total < 0.5) {
-        return response()->json(['error' => 'El total debe ser al menos 0,50€.'], 422);
-    }
-
-    // 5) Crear orden + sesión Stripe en transacción
-    try {
-        return DB::transaction(function () use (
-            $user, $validated, $resolvedItems, $shippingPrice, $total,
-            $discount, $discountAmount, $stripeCouponId
-        ) {
-            $order = Order::create([
-                'user_id'         => $user->id,
-                'status'          => 'pending',
-                'payment_status'  => 'pending',
-                'total'           => $total,
-                'shipping_info'   => $validated['shipping_info'],
-                'shipping_method' => [
-                    'country_code' => strtoupper($validated['shipping_info']['country_code']),
-                    'price'        => $shippingPrice,
-                ],
-                'discount_code'   => $discount?->code,
-                'discount_amount' => $discountAmount,
-            ]);
-
-            // Registrar el uso del código en BD
-            if ($discount) {
-                $discount->uses()->create([
-                    'user_id'           => $user->id,
-                    'order_id'          => $order->id,
-                    'amount_discounted' => $discountAmount,
-                    'used_at'           => now(),
-                ]);
-                $discount->increment('used_count');
-            }
-
-            // Line items para Stripe (precios SIN descuento — Stripe lo aplica con el cupón)
-            $lineItems = [];
-
-            foreach ($resolvedItems as $r) {
-                /** @var \App\Models\Product $product */
-                $product = $r['product'];
-
-                OrderItem::create([
-                    'order_id'      => $order->id,
-                    'product_id'    => $product->id,
-                    'quantity'      => $r['quantity'],
-                    'variant'       => $r['variant'],
-                    'price'         => $r['price'],
-                    'product_name'  => $product->name,
-                    'product_image' => optional($product->images->first())->image_url,
-                ]);
-
-                $lineItems[] = [
-                    'price_data' => [
-                        'currency' => 'eur',
-                        'product_data' => [
-                            'name' => $product->name . ($r['variant'] === 'unpainted' ? ' (sin pintar)' : ''),
-                        ],
-                        'unit_amount' => (int) round($r['price'] * 100),
-                    ],
-                    'quantity' => $r['quantity'],
-                ];
-            }
-
-            if ($shippingPrice > 0) {
-                $lineItems[] = [
-                    'price_data' => [
-                        'currency' => 'eur',
-                        'product_data' => ['name' => 'Envío'],
-                        'unit_amount' => (int) round($shippingPrice * 100),
-                    ],
-                    'quantity' => 1,
-                ];
-            }
-
-            // Construir params de Stripe
-            $sessionParams = [
-                'payment_method_types' => ['card'],
-                'line_items'           => $lineItems,
-                'mode'                 => 'payment',
-                'success_url'          => rtrim(config('app.frontend_url'), '/') . '/order-success?session_id={CHECKOUT_SESSION_ID}',
-                'cancel_url'           => rtrim(config('app.frontend_url'), '/') . '/cart',
-                'customer_email'       => $user->email,
-            ];
-
-            // Aplicar cupón Stripe si hay descuento
-            if ($stripeCouponId) {
-                $sessionParams['discounts'] = [
-                    ['coupon' => $stripeCouponId],
-                ];
-            }
-
-            $session = Session::create($sessionParams);
-
-            $order->update(['stripe_session_id' => $session->id]);
-
-            return response()->json(['session_id' => $session->id]);
-        });
-    } catch (ApiErrorException $e) {
-        Log::error('Stripe error: ' . $e->getMessage());
-        return response()->json(['error' => 'Error procesando el pago.'], 500);
-    } catch (\Exception $e) {
-        Log::error('Checkout error: ' . $e->getMessage());
-        return response()->json(['error' => 'Error creando el pedido.'], 500);
-    }
-}
-public function confirmPayment(Request $request)
-{
-    $request->validate([
-        'session_id' => 'required|string|max:200'
-    ]);
-
-    try {
-        $session = Session::retrieve($request->session_id);
-
-        if (!$session) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Sesión no encontrada'
-            ], 404);
-        }
-
-        $order = Order::where('stripe_session_id', $session->id)->first();
-
-        if (!$order) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Orden no encontrada'
-            ], 404);
-        }
-
-        // Verificar que el pedido pertenece al usuario autenticado
-        if ($order->user_id !== $request->user()->id) {
-            return response()->json([
-                'success' => false,
-                'message' => 'No autorizado'
-            ], 403);
-        }
-
-        if ($session->payment_status === 'paid' && $order->payment_status !== 'paid') {
-            $order->update([
-                'status' => 'paid',
-                'payment_status' => 'paid',
-                'payment_intent' => $session->payment_intent,
-            ]);
-
-            $this->notifyOrderPaid($order);
-        }
-
-        return response()->json([
-            'success' => true,
-            'order' => $order->load('items')
+            'discount_code' => 'nullable|string|max:30',
         ]);
 
-    } catch (ApiErrorException $e) {
-        Log::error('Stripe confirmation error: ' . $e->getMessage());
+        // Normalizar teléfono (quita espacios, guiones, paréntesis, etc.)
+        $validated['shipping_info']['phone'] = self::normalizePhone($validated['shipping_info']['phone']);
 
-        return response()->json([
-            'success' => false,
-            'message' => 'Error al confirmar el pago'
-        ], 500);
+        $user = $request->user();
+
+        // 1) Precio de envío recalculado en backend
+        try {
+            $shippingPrice = $shipping->priceFor($validated['shipping_info']['country_code']);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => $e->getMessage()], 422);
+        }
+
+        // 2) Resolver productos y calcular precios reales (nunca confiar en el frontend)
+        $productIds = collect($validated['items'])->pluck('product_id')->unique()->values();
+        $products = Product::with('images')->whereIn('id', $productIds)->get()->keyBy('id');
+
+        $resolvedItems = [];
+        $subtotal = 0;
+
+        foreach ($validated['items'] as $item) {
+            $product = $products->get($item['product_id']);
+            if (!$product) {
+                return response()->json(['error' => "Producto no encontrado: {$item['product_id']}"], 422);
+            }
+            if ($product->stock < $item['quantity']) {
+                return response()->json(['error' => "Stock insuficiente para {$product->name}"], 422);
+            }
+
+            $variant = $item['variant'] ?? 'painted';
+            try {
+                $price = $product->priceForVariant($variant);
+            } catch (\InvalidArgumentException $e) {
+                return response()->json(['error' => $e->getMessage()], 422);
+            }
+
+            $resolvedItems[] = compact('product', 'variant', 'price') + ['quantity' => $item['quantity']];
+            $subtotal += $price * $item['quantity'];
+        }
+
+        // 3) Validar código de descuento (si viene) y preparar cupón Stripe
+        $discount = null;
+        $discountAmount = 0;
+        $stripeCouponId = null;
+
+        if (!empty($validated['discount_code'])) {
+            try {
+                $discount = $discountService->validate(
+                    $validated['discount_code'],
+                    $user->id,
+                    $subtotal
+                );
+                $discountAmount = $discountService->amountFor($discount, $subtotal);
+                $stripeCouponId = $discountService->getOrCreateStripeCoupon($discount);
+            } catch (\InvalidArgumentException $e) {
+                return response()->json(['error' => $e->getMessage()], 422);
+            }
+        }
+
+        // 4) Total final
+        $total = max(0, ($subtotal - $discountAmount) + $shippingPrice);
+
+        if ($total < 0.5) {
+            return response()->json(['error' => 'El total debe ser al menos 0,50€.'], 422);
+        }
+
+        // 5) Crear orden + sesión Stripe en transacción
+        try {
+            return DB::transaction(function () use (
+                $user, $validated, $resolvedItems, $shippingPrice, $total,
+                $discount, $discountAmount, $stripeCouponId
+            ) {
+                $order = Order::create([
+                    'user_id'         => $user->id,
+                    'status'          => 'pending',
+                    'payment_status'  => 'pending',
+                    'total'           => $total,
+                    'shipping_info'   => $validated['shipping_info'],
+                    'shipping_method' => [
+                        'country_code' => strtoupper($validated['shipping_info']['country_code']),
+                        'price'        => $shippingPrice,
+                    ],
+                    'discount_code'   => $discount?->code,
+                    'discount_amount' => $discountAmount,
+                ]);
+
+                // Registrar el uso del código en BD
+                if ($discount) {
+                    $discount->uses()->create([
+                        'user_id'           => $user->id,
+                        'order_id'          => $order->id,
+                        'amount_discounted' => $discountAmount,
+                        'used_at'           => now(),
+                    ]);
+                    $discount->increment('used_count');
+                }
+
+                // Line items para Stripe (precios SIN descuento — Stripe lo aplica con el cupón)
+                $lineItems = [];
+
+                foreach ($resolvedItems as $r) {
+                    /** @var \App\Models\Product $product */
+                    $product = $r['product'];
+
+                    OrderItem::create([
+                        'order_id'      => $order->id,
+                        'product_id'    => $product->id,
+                        'quantity'      => $r['quantity'],
+                        'variant'       => $r['variant'],
+                        'price'         => $r['price'],
+                        'product_name'  => $product->name,
+                        'product_image' => optional($product->images->first())->image_url,
+                    ]);
+
+                    $lineItems[] = [
+                        'price_data' => [
+                            'currency' => 'eur',
+                            'product_data' => [
+                                'name' => $product->name . ($r['variant'] === 'unpainted' ? ' (sin pintar)' : ''),
+                            ],
+                            'unit_amount' => (int) round($r['price'] * 100),
+                        ],
+                        'quantity' => $r['quantity'],
+                    ];
+                }
+
+                if ($shippingPrice > 0) {
+                    $lineItems[] = [
+                        'price_data' => [
+                            'currency' => 'eur',
+                            'product_data' => ['name' => 'Envío'],
+                            'unit_amount' => (int) round($shippingPrice * 100),
+                        ],
+                        'quantity' => 1,
+                    ];
+                }
+
+                // Construir params de Stripe
+                $sessionParams = [
+                    'payment_method_types' => ['card'],
+                    'line_items'           => $lineItems,
+                    'mode'                 => 'payment',
+                    'success_url'          => rtrim(config('app.frontend_url'), '/') . '/order-success?session_id={CHECKOUT_SESSION_ID}',
+                    'cancel_url'           => rtrim(config('app.frontend_url'), '/') . '/cart',
+                    'customer_email'       => $user->email,
+                    'payment_intent_data'  => [
+                        'shipping' => [
+                            'name' => $validated['shipping_info']['fullName'],
+                            'phone' => $validated['shipping_info']['phone'],
+                            'address' => [
+                                'line1'       => $validated['shipping_info']['address'],
+                                'city'        => $validated['shipping_info']['city'],
+                                'postal_code' => $validated['shipping_info']['postalCode'],
+                                'country'     => strtoupper($validated['shipping_info']['country_code']),
+                            ],
+                        ],
+                    ],
+                ];
+
+                // Aplicar cupón Stripe si hay descuento
+                if ($stripeCouponId) {
+                    $sessionParams['discounts'] = [
+                        ['coupon' => $stripeCouponId],
+                    ];
+                }
+
+                $session = Session::create($sessionParams);
+
+                $order->update(['stripe_session_id' => $session->id]);
+
+                return response()->json(['session_id' => $session->id]);
+            });
+        } catch (ApiErrorException $e) {
+            Log::error('Stripe error: ' . $e->getMessage());
+            return response()->json(['error' => 'Error procesando el pago.'], 500);
+        } catch (\Exception $e) {
+            Log::error('Checkout error: ' . $e->getMessage());
+            return response()->json(['error' => 'Error creando el pedido.'], 500);
+        }
     }
-}
+
+    public function confirmPayment(Request $request)
+    {
+        $request->validate([
+            'session_id' => 'required|string',
+        ]);
+
+        try {
+            $session = Session::retrieve($request->session_id);
+
+            if (!$session) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Sesión no encontrada',
+                ], 404);
+            }
+
+            $order = Order::where('stripe_session_id', $session->id)->first();
+
+            if (!$order) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Orden no encontrada',
+                ], 404);
+            }
+
+            if ($session->payment_status === 'paid' && $order->payment_status !== 'paid') {
+                $order->update([
+                    'status' => 'paid',
+                    'payment_status' => 'paid',
+                    'payment_intent' => $session->payment_intent,
+                ]);
+
+                $this->notifyOrderPaid($order);
+            }
+
+            return response()->json([
+                'success' => true,
+                'order' => $order->load('items'),
+            ]);
+
+        } catch (ApiErrorException $e) {
+            Log::error('Stripe confirmation error: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al confirmar el pago',
+            ], 500);
+        }
+    }
 
     public function handleWebhook(Request $request)
     {
         $payload = $request->getContent();
-        $sig_header = $request->header('Stripe-Signature');
-        $endpoint_secret = config('services.stripe.webhook_secret');
+        $sigHeader = $request->header('Stripe-Signature');
+        $endpointSecret = config('services.stripe.webhook_secret');
 
         try {
-            $event = \Stripe\Webhook::constructEvent(
-                $payload,
-                $sig_header,
-                $endpoint_secret
-            );
+            $event = Webhook::constructEvent($payload, $sigHeader, $endpointSecret);
         } catch (\UnexpectedValueException $e) {
             Log::error('Invalid webhook payload');
             return response()->json(['error' => 'Invalid payload'], 400);
@@ -301,50 +313,76 @@ public function confirmPayment(Request $request)
     }
 
     private function handleCheckoutCompleted($session): void
-{
-    $order = Order::where('stripe_session_id', $session->id)->first();
-    if (!$order) return;
+    {
+        $order = Order::where('stripe_session_id', $session->id)->first();
+        if (!$order) return;
 
-    if ($order->payment_status !== 'paid') {
-        $order->update([
-            'status' => 'paid',
-            'payment_status' => 'paid',
-            'payment_intent' => $session->payment_intent ?? null,
-        ]);
+        if ($order->payment_status !== 'paid') {
+            $order->update([
+                'status' => 'paid',
+                'payment_status' => 'paid',
+                'payment_intent' => $session->payment_intent ?? null,
+            ]);
 
-        $this->notifyOrderPaid($order);
+            $this->notifyOrderPaid($order);
+        }
     }
-}
 
-    private function handleCheckoutExpired($session)
+    private function handleCheckoutExpired($session): void
     {
         $order = Order::where('stripe_session_id', $session->id)->first();
 
         if ($order && $order->payment_status === 'pending') {
             $order->update([
-                'payment_status' => 'failed'
+                'payment_status' => 'failed',
             ]);
 
             Log::info('Order marked as failed due to session expiry', ['order_id' => $order->id]);
         }
     }
-/* POSIBLE BORRAR SI TODO VA BIEN
+
+    private function notifyOrderPaid(Order $order): void
+    {
+        try {
+            $order->loadMissing(['user', 'items']);
+
+            if ($order->user) {
+                $order->user->notify(new OrderPaidCustomer($order));
+            }
+
+            $adminEmail = config('mail.admin_notification_email')
+                ?? env('ADMIN_NOTIFICATION_EMAIL');
+
+            if ($adminEmail) {
+                Notification::route('mail', $adminEmail)
+                    ->notify(new OrderPaidAdmin($order));
+            }
+        } catch (\Throwable $e) {
+            Log::warning('No se pudieron enviar notificaciones del pedido: ' . $e->getMessage(), [
+                'order_id' => $order->id,
+            ]);
+        }
+    }
+
     public function success(Request $request)
     {
-        $session_id = $request->get('session_id');
+        $sessionId = $request->get('session_id');
 
         try {
-            $session = Session::retrieve($session_id);
+            $session = Session::retrieve($sessionId);
 
             return response()->json([
                 'status' => 'success',
                 'session' => $session,
-                'payment_status' => $session->payment_status
+                'payment_status' => $session->payment_status,
             ]);
 
         } catch (ApiErrorException $e) {
             Log::error('Error retrieving session: ' . $e->getMessage());
-            return response()->json(['error' => $e->getMessage()], 500);
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Error al recuperar la sesión',
+            ], 500);
         }
     }
 
@@ -352,32 +390,20 @@ public function confirmPayment(Request $request)
     {
         return response()->json([
             'status' => 'cancelled',
-            'message' => 'Pago cancelado por el usuario'
+            'message' => 'Pago cancelado por el usuario',
         ]);
     }
 
     /**
-     * Construye los line items para Stripe basado en la request
+     * Normaliza un teléfono a solo dígitos y el + inicial.
+     * Ejemplo: "+34 612 345 678" → "+34612345678"
      */
-
-    private function notifyOrderPaid(\App\Models\Order $order): void
-{
-    try {
-        // Cliente
-        if ($order->user) {
-            $order->user->notify(new \App\Notifications\OrderPaidCustomer($order));
+    protected static function normalizePhone(string $phone): string
+    {
+        $normalized = preg_replace('/[^\d+]/', '', $phone);
+        if (str_contains($normalized, '+')) {
+            $normalized = '+' . preg_replace('/[^\d]/', '', $normalized);
         }
-
-        // Admin
-        $adminEmail = config('mail.admin_notification_email');
-        if ($adminEmail) {
-            \Illuminate\Support\Facades\Notification::route('mail', $adminEmail)
-                ->notify(new \App\Notifications\OrderPaidAdmin($order));
-        }
-    } catch (\Throwable $e) {
-        \Illuminate\Support\Facades\Log::error('Error enviando notificación de pedido pagado: ' . $e->getMessage(), [
-            'order_id' => $order->id,
-        ]);
+        return $normalized;
     }
-}
 }
